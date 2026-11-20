@@ -1,0 +1,11 @@
+numpy
+pandas
+scikit-learn
+scipy
+matplotlib
+tabulate
+# laptop only (embeddings + autoencoder):
+torch
+sentence-transformers
+pyod
+pyarrow
