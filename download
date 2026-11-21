@@ -1,0 +1,46 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# --- Virtual environments (uv) ---
+.venv/
+venv/
+env/
+
+# --- Tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Data (keep raw/derived data out of git; docs in data/ are kept) ---
+data/raw/
+data/derived/
+src/data/
+*.pkl
+*.parquet
+*.csv
+!results/*.csv
+*.xlsx
+*.xls
+!data/*.md
+
+# --- Secrets / local config ---
+.env
+.env.*
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*

@@ -1,7 +1,7 @@
 """Load the DIB synthetic general ledger and build the journal-entry table.
 
 Unit of analysis = journal entry (posting_id). Labels, markings and all rule
-columns are constant within an entry (checked in validate_jets.py).
+columns are constant within an entry (checked in notebook 01).
 """
 from pathlib import Path
 import pandas as pd
