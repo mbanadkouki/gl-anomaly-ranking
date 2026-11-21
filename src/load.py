@@ -8,8 +8,8 @@ import pandas as pd
 
 RAW = Path(__file__).resolve().parents[1] / "data" / "raw" / "journal_entries_4203.csv"
 
-# Precomputed columns of the dataset. Never used as model features (leakage guard);
-# only used to validate our own JET implementation.
+# Precomputed columns of the dataset. top_n / high_cash define the JET flags only;
+# promptly / weekend / nwh are also model features (decision D4, src/encode.py).
 PRECOMPUTED_RULE_COLS = ["promptly", "weekend", "nwh", "top_n", "high_cash"]
 LABEL_COLS = ["label", "marking"]
 CASH_ACCOUNT = 1000          # Cash-in-hand

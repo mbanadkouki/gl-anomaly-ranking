@@ -43,6 +43,7 @@ gl-anomaly-ranking/
 ├── data/
 │   ├── raw/          # original CSV (not committed, never modified)
 │   └── derived/      # generated features, keyed by posting_id (not committed)
+├── notebooks/        # one notebook per process step (01_jets_meta, 02_encoding_onehot, ...)
 ├── src/              # reusable modules (no week prefix)
 ├── configs/          # run configurations (planned)
 ├── results/          # week reports, runs.csv, figures
@@ -56,34 +57,41 @@ gl-anomaly-ranking/
 **Current modules**
 - `src/load.py`: load posting lines and build one row per journal entry (raw-derived fields only)
 - `src/jets.py`: J1–J4 implemented from raw fields (validation against the dataset rule attributes)
+- `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`)
+- `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation, `data/derived/meta.parquet`
+- `notebooks/02_encoding_onehot.ipynb`: one-hot + padding encoding → `data/derived/X_onehot.npz` + `onehot_features.json`
 - `week01_validate_jets.py`: week 01 profiling + JET validation → `results/week01_jet_validation.md`
 
-**Planned:** `src/encode.py`, `src/detectors.py`, `src/methods.py`, `src/metrics.py`, `src/stats.py`, `run.py`, `configs/`
+**Planned:** `src/metrics.py`, `src/detectors.py`, `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
 
 ## Rules
 
 - **FY2023 = tuning year** (labels may be used for hyperparameters). **FY2024 = test year.** Fiscal year = year of `posting_date`.
 - The JET populations used in the experiments come from the dataset rule attributes (`top_n`, `high_cash`, `promptly`, `weekend`, `nwh`), for comparability with Gronewald et al. (2026). The raw-field implementation in `src/jets.py` is used for validation only.
-- The precomputed columns `promptly`, `weekend`, `nwh`, `top_n`, `high_cash`, `label` and `marking` are **never model features**. The rule attributes define only the JET flags, and `label` and `marking` are used only for evaluation.
+- `top_n`, `high_cash`, `label` and `marking` are **never model features**: `top_n` and `high_cash` define only the JET flags, and `label` and `marking` are used only for evaluation.
+- `promptly`, `weekend` and `nwh` are model features (feature group `calendar_flags`, decision D4, to be confirmed by the supervisors), together with a continuous `lag_days`. Each feature group can be switched off per run, so the proposal variant without them stays available.
+- Design decisions (D1–D13) with options and rationale: `results/feature_engineering_plan.md`.
 - The raw CSV is never modified. Storage formats: Parquet for tables, `.npy` for dense arrays, `.npz` for sparse matrices and CSV for run results. No pickle.
 
 ## Run
 
 ```bash
 pip install -r requirements.txt
-python week01_validate_jets.py
 ```
+
+Then run the notebooks in `notebooks/` in order (01, 02, …). Each notebook finds the project root itself, so it runs from `notebooks/`, the project root or Colab.
 
 ## Naming
 
-Scripts and outputs that belong to one week carry a zero-padded prefix (`week01_`, `week02_`, … `week16_`) so they sort correctly. Reusable modules in `src/` have no prefix.
+Notebooks are named by process step, not by week: `NN_step_name.ipynb` (`01_jets_meta`, `02_encoding_onehot`, `03_baselines`, …). Reusable modules in `src/` have no prefix. Only weekly reports and notes in `results/` carry a week prefix (`week01_`, `week02_`, …).
 
 ## Status
 
 | Step | Status |
 |---|---|
 | Week 01: data profiling, JET validation | ✅ done |
-| Encodings (one-hot, embeddings) | 🔄 next |
+| One-hot + padding encoding | ✅ done |
+| Metrics, baselines, sentence embeddings | 🔄 next |
 | Detectors and methods | ⏳ planned |
 | Evaluation and statistics | ⏳ planned |
 | Thesis write-up | ⏳ planned |

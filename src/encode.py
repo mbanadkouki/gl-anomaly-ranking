@@ -1,0 +1,237 @@
+"""One-hot + padding encoding of journal entries (notebook 02_encoding_onehot).
+
+Design decisions are documented in results/feature_engineering_plan.md:
+  D9  line order inside the padding (debit first, then account, then amount desc)
+  D10 scalers fitted on FY1 only (FY2 values are not clipped)
+  D4  promptly / weekend / nwh kept as features, lag_days added
+  D11 nwh_dist, hour sin/cos, weekday sin/cos built as switchable groups
+
+Everything is aligned to the row order of data/derived/meta.parquet (posting_id).
+Fitted parameters are stored as JSON (no pickle).
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, asdict
+
+import numpy as np
+import pandas as pd
+from scipy import sparse
+
+from .load import WORK_START, WORK_END   # working window of the dataset flag nwh (08:00-17:59)
+
+MAX_LINES = 4   # longest entry in the ledger (1 entry has 4 lines)
+PAD = "PAD"
+
+# Main setting (D4, D11). Switch groups on/off per run with select_columns().
+FEATURE_GROUPS_MAIN = {
+    "lines": True,           # per-slot account / side / amount, n_lines, user, tax_rate
+    "calendar_flags": True,  # promptly, weekend, nwh (dataset columns)
+    "lag_days": True,        # continuous entry lag
+    "nwh_dist": False,       # hours outside the working window (ablation)
+    "hour_cyc": False,       # hour_sin, hour_cos (ablation)
+    "wday_cyc": False,       # wday_sin, wday_cos (ablation)
+}
+ALL_GROUPS = list(FEATURE_GROUPS_MAIN)
+
+
+# ---------------------------------------------------------------- line order (D9)
+def sort_lines(lines: pd.DataFrame) -> pd.DataFrame:
+    """Sort lines inside each entry: debit first, then account number, then amount
+    (largest first), then original CSV position. Adds `csv_pos` and `slot` (0-based)."""
+    out = lines.copy()
+    out["csv_pos"] = out.groupby("posting_id", sort=False).cumcount()
+    out["_side"] = (out["cd_flag"] == "C").astype(int)        # D = 0 comes first
+    out = out.sort_values(
+        ["posting_id", "_side", "gl_account", "amount", "csv_pos"],
+        ascending=[True, True, True, False, True],
+        kind="mergesort",
+    )
+    out["slot"] = out.groupby("posting_id", sort=False).cumcount()
+    return out.drop(columns="_side")
+
+
+def order_changes(sorted_lines: pd.DataFrame) -> pd.Series:
+    """True per posting_id if the CSV line order differs from the D9 order."""
+    changed = sorted_lines["csv_pos"] != sorted_lines["slot"]
+    return changed.groupby(sorted_lines["posting_id"]).any()
+
+
+# ---------------------------------------------------------------- scaling (D10)
+@dataclass
+class FY1Scaler:
+    """optional log1p -> robust (median / IQR) -> min-max, all fitted on FY1 values.
+    FY1 values end in [0, 1]; FY2 values may fall outside and are NOT clipped."""
+    log1p: bool
+    robust: bool
+    median: float = 0.0
+    iqr: float = 1.0
+    zmin: float = 0.0
+    zmax: float = 1.0
+
+    def _pre(self, x):
+        x = np.asarray(x, dtype=float)
+        if self.log1p:
+            x = np.log1p(x)
+        if self.robust:
+            x = (x - self.median) / self.iqr
+        return x
+
+    def fit(self, x_fy1):
+        x = np.asarray(x_fy1, dtype=float)
+        if self.log1p:
+            x = np.log1p(x)
+        if self.robust:
+            q1, q3 = np.percentile(x, [25, 75])
+            self.median = float(np.median(x))
+            self.iqr = float(q3 - q1) if q3 > q1 else 1.0
+        z = self._pre(x_fy1)
+        self.zmin, self.zmax = float(z.min()), float(z.max())
+        if self.zmax == self.zmin:
+            self.zmax = self.zmin + 1.0
+        return self
+
+    def transform(self, x):
+        return (self._pre(x) - self.zmin) / (self.zmax - self.zmin)
+
+
+# ---------------------------------------------------------------- entry table
+ENTRY_COLS = ["document_date", "entered_date", "user", "tax_rate",
+              "promptly", "weekend", "nwh"]
+
+
+def entry_table(lines: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """One row per entry in meta order. The ENTRY_COLS are constant inside every
+    posting_id (checked in notebook 02), so the first line is taken."""
+    e = lines.groupby("posting_id", sort=False)[ENTRY_COLS].first()
+    e = e.reindex(meta["posting_id"].to_numpy())
+    e["fy"] = meta["fy"].to_numpy()
+    e["n_lines"] = meta["n_lines"].to_numpy()
+
+    ent = pd.to_datetime(e["entered_date"])
+    doc = pd.to_datetime(e["document_date"])
+    e["lag_days_raw"] = (ent.dt.normalize() - doc).dt.days.astype(float)
+    t = ent.dt.hour + ent.dt.minute / 60 + ent.dt.second / 3600
+    e["hour_t"] = t
+    e["wday"] = ent.dt.dayofweek                              # Monday = 0
+    e["nwh_dist_raw"] = np.maximum(0, WORK_START - t) + np.maximum(0, t - WORK_END)
+    return e
+
+
+# ---------------------------------------------------------------- encoding
+def _onehot(values, categories):
+    idx = pd.Categorical(values, categories=categories).codes
+    if (idx < 0).any():
+        raise ValueError("value outside the category list")
+    n = len(values)
+    return sparse.csr_matrix((np.ones(n), (np.arange(n), idx)), shape=(n, len(categories)))
+
+
+def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame, fy1: int):
+    """Return (X csr float32, feature_info list, params dict).
+
+    lines: raw posting lines (CSV), meta: meta.parquet, fy1: tuning year (e.g. 2023).
+    """
+    sl = sort_lines(lines)
+    ent = entry_table(lines, meta)
+    n = len(meta)
+    row_of = pd.Series(np.arange(n), index=meta["posting_id"].to_numpy())
+    sl["row"] = row_of.reindex(sl["posting_id"]).to_numpy()
+    if sl["row"].isna().any():
+        raise ValueError("posting_id in CSV but not in meta")
+    sl["row"] = sl["row"].astype(int)
+    sl["fy"] = ent["fy"].to_numpy()[sl["row"]]
+
+    accounts = sorted(lines["gl_account"].unique().tolist())
+    users = sorted(lines["user"].unique().tolist())
+    taxes = sorted(lines["tax_rate"].unique().tolist())
+
+    amount_sc = FY1Scaler(log1p=True, robust=True).fit(sl.loc[sl["fy"] == fy1, "amount"])
+    is1 = (ent["fy"] == fy1).to_numpy()
+    lag_sc = FY1Scaler(log1p=True, robust=True).fit(ent.loc[is1, "lag_days_raw"])
+    dist_max = float(ent.loc[is1, "nwh_dist_raw"].max()) or 1.0
+
+    blocks, info = [], []
+
+    def add(block, names, group, slot=None):
+        blocks.append(sparse.csr_matrix(block))
+        for nm in names:
+            info.append({"name": nm, "group": group, "slot": slot})
+
+    # --- per-slot block (group "lines")
+    for s in range(MAX_LINES):
+        part = sl[sl["slot"] == s]
+        rows = part["row"].to_numpy()
+        acct = np.full(n, PAD, dtype=object)
+        acct[rows] = part["gl_account"].astype(str).to_numpy()
+        side = np.full(n, PAD, dtype=object)
+        side[rows] = part["cd_flag"].to_numpy()
+        amt = np.zeros(n)
+        amt[rows] = amount_sc.transform(part["amount"].to_numpy())
+
+        acct_cats = [str(a) for a in accounts] + [PAD]
+        add(_onehot(acct, acct_cats), [f"s{s+1}_acct_{a}" for a in acct_cats], "lines", s + 1)
+        add(_onehot(side, ["D", "C", PAD]), [f"s{s+1}_cd_{c}" for c in ["D", "C", PAD]], "lines", s + 1)
+        add(amt.reshape(-1, 1), [f"s{s+1}_amount"], "lines", s + 1)
+
+    # --- per-entry attributes (group "lines")
+    add(((ent["n_lines"].to_numpy() - 2) / (MAX_LINES - 2)).reshape(-1, 1), ["n_lines"], "lines")
+    add(_onehot(ent["user"].to_numpy(), users), [f"user_{u}" for u in users], "lines")
+    add(_onehot(ent["tax_rate"].to_numpy(), taxes), [f"tax_{t:g}" for t in taxes], "lines")
+
+    # --- calendar flags (D4)
+    add(((ent["promptly"].to_numpy() - 1) / 2).reshape(-1, 1), ["promptly"], "calendar_flags")
+    add(_onehot(ent["weekend"].to_numpy(), [0, 1, 2]),
+        ["weekend_weekday", "weekend_sat", "weekend_sun"], "calendar_flags")
+    add(ent["nwh"].to_numpy().reshape(-1, 1).astype(float), ["nwh"], "calendar_flags")
+
+    # --- lag_days (D4)
+    add(lag_sc.transform(ent["lag_days_raw"]).reshape(-1, 1), ["lag_days"], "lag_days")
+
+    # --- D11 ablation groups
+    add((ent["nwh_dist_raw"].to_numpy() / dist_max).reshape(-1, 1), ["nwh_dist"], "nwh_dist")
+    a = 2 * np.pi * ent["hour_t"].to_numpy() / 24
+    add(np.c_[np.sin(a), np.cos(a)], ["hour_sin", "hour_cos"], "hour_cyc")
+    w = 2 * np.pi * ent["wday"].to_numpy() / 7
+    add(np.c_[np.sin(w), np.cos(w)], ["wday_sin", "wday_cos"], "wday_cyc")
+
+    X = sparse.hstack(blocks, format="csr", dtype=np.float32)
+    X.eliminate_zeros()
+    params = {
+        "fy1": fy1,
+        "max_lines": MAX_LINES,
+        "line_order": "D before C, then gl_account asc, then amount desc, then CSV position (D9)",
+        "categories": {"gl_account": accounts, "user": users, "tax_rate": taxes},
+        "scalers": {"amount": asdict(amount_sc), "lag_days": asdict(lag_sc),
+                    "nwh_dist": {"divide_by_fy1_max": dist_max}},
+        "working_window": [WORK_START, WORK_END],
+    }
+    return X, info, params, sl, ent
+
+
+# ---------------------------------------------------------------- selection / IO
+def select_columns(X, feature_info, groups: dict):
+    """Keep only the columns whose group is switched on. Returns (X_sel, names)."""
+    unknown = set(groups) - set(ALL_GROUPS)
+    if unknown:
+        raise ValueError(f"unknown groups: {unknown}")
+    keep = [i for i, f in enumerate(feature_info) if groups.get(f["group"], False)]
+    return X[:, keep], [feature_info[i]["name"] for i in keep]
+
+
+def groups_label(groups: dict) -> str:
+    """Short text for the feature_groups column in results/runs.csv."""
+    return "+".join(g for g in ALL_GROUPS if groups.get(g, False))
+
+
+def save_encoding(X, feature_info, params, x_path, json_path):
+    sparse.save_npz(x_path, X)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({"features": feature_info, "params": params}, f, indent=1)
+
+
+def load_encoding(x_path, json_path):
+    X = sparse.load_npz(x_path).tocsr()
+    with open(json_path, encoding="utf-8") as f:
+        meta = json.load(f)
+    return X, meta["features"], meta["params"]
