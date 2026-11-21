@@ -49,18 +49,16 @@ gl-anomaly-ranking/
 ├── results/          # week reports, runs.csv, figures
 ├── docs/
 │   └── publications/ # thesis and related papers, once approved by SRH
-├── week01_validate_jets.py
 ├── requirements.txt
 └── README.md
 ```
 
 **Current modules**
 - `src/load.py`: load posting lines and build one row per journal entry (raw-derived fields only)
-- `src/jets.py`: J1–J4 implemented from raw fields (validation against the dataset rule attributes)
+- `src/jets.py`: J1–J4 implemented from raw fields (validation against the dataset rule attributes, used in notebook 01)
 - `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`)
-- `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation, `data/derived/meta.parquet`
+- `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation against `src/jets.py`, `data/derived/meta.parquet` + `jet_validation.csv`
 - `notebooks/02_encoding_onehot.ipynb`: one-hot + padding encoding → `data/derived/X_onehot.npz` + `onehot_features.json`
-- `week01_validate_jets.py`: week 01 profiling + JET validation → `results/week01_jet_validation.md`
 
 **Planned:** `src/metrics.py`, `src/detectors.py`, `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
 
