@@ -28,6 +28,7 @@ src/data/
 *.pkl
 *.parquet
 *.csv
+!results/*.csv
 *.xlsx
 *.xls
 !data/*.md
