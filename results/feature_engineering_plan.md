@@ -1,8 +1,8 @@
-# Feature engineering plan (draft, 19 Nov 2026; updated 21 Nov 2026: D1, D4, D11 feature groups with switches; D3, D6, D7, D9, D10 rationale added; D13 + notebook 02 results)
+# Feature engineering plan (draft, 19 Nov 2026; updated 23 Nov 2026: D13 dataset-vs-real-ledger note, section F Limitations)
 
 To discuss with supervisors before implementation (week 2). Rule: the raw CSV is never modified; everything is stored in derived files keyed by `posting_id`, in the row order of `meta.parquet`.
 
-**Writing rule:** every decision below has options, a rationale and, where useful, an example. These go into the thesis (Ch. 3, Methodology: feature engineering / experimental setup), not only the final choice.
+**Writing rule:** every decision below has options, a rationale and, where useful, an example. These go into the thesis (Ch. 3, Methodology: feature engineering / experimental setup), not only the final choice. Every point where a choice depends on a property of the synthetic dataset rather than on real accounting practice is also listed in section F (Limitations).
 
 ## A. Entry-level meta table — `data/derived/meta.parquet` (built in notebook 01, NOT a model input)
 
@@ -20,7 +20,7 @@ To discuss with supervisors before implementation (week 2). Rule: the raw CSV is
 | `h` | J1 + J2 + J3 + J4 | JET-only baseline order; combined score s = α·h/4 + (1−α)·r |
 | `jet_any` | h > 0 (24,183 entries, 798 anomalies) | prefilter 4(a), H1, inside/outside split, RQ3 |
 
-Decision (19 Nov): J1 follows the dataset `top_n` for comparability. Own raw implementation (ties included: 2,209) is kept as validation only.
+Decision (19 Nov): J1 follows the dataset `top_n` for comparability. Own raw implementation in `src/jets.py` (ties included: 2,209) is kept as validation only (used in notebook 01).
 
 ## B. One-hot + padding encoding (week 2) — `X_onehot.npz` (sparse) + `onehot_features.json`
 
@@ -38,7 +38,7 @@ Per entry:
 |---|---|---|
 | `n_lines` | from meta, (n − 2) / 2 | `lines` |
 | `user` | one-hot (6 users), once per entry (D13) | `lines` |
-| `tax_rate` | one-hot (0.19 / 0.00), once per entry (D13) | `lines` |
+| `tax_rate` | one-hot (0.19 / 0.00), once per entry (D13 — dataset property, see F) | `lines` |
 | `promptly` | dataset column, ordinal 1 / 2 / 3 (lag 0–9 / 10–29 / 30+ days), as (p − 1) / 2 | `calendar_flags` (D4) |
 | `weekend` | dataset column: 0 weekday, 1 Sat, 2 Sun (one-hot) | `calendar_flags` (D4) |
 | `nwh` | dataset column: 1 = entered outside 08:00–17:59 (checked in the data, see D11) | `calendar_flags` (D4) |
@@ -49,7 +49,7 @@ Per entry:
 
 H2 input = selected feature groups + [J1, J2, J3, J4] columns from meta.
 
-**Built in notebook `02_encoding_onehot.ipynb` with `src/features.py` (21 Nov 2026):** 140 columns in total — `lines` 129 (4 slots × (26 account + 3 side + 1 amount) + n_lines + 6 users + 2 tax rates), `calendar_flags` 5, `lag_days` 1, `nwh_dist` 1, `hour_cyc` 2, `wday_cyc` 2. Main setting = 135 columns; all groups = 140; proposal variant (`lines` only) = 129. Fitted parameters (categories, scaler values) are stored in `onehot_features.json`.
+**Built in notebook `02_encoding_onehot.ipynb` with `src/encode.py` (21 Nov 2026; run with outputs, committed 21 Nov):** 140 columns in total — `lines` 129 (4 slots × (26 account + 3 side + 1 amount) + n_lines + 6 users + 2 tax rates), `calendar_flags` 5, `lag_days` 1, `nwh_dist` 1, `hour_cyc` 2, `wday_cyc` 2. Main setting = 135 columns; all groups = 140; proposal variant (`lines` only) = 129. Fitted parameters (categories, scaler values) are stored in `onehot_features.json`.
 
 **Data checks from notebook 02 (numbers for Ch. 3):**
 - `user`, `tax_rate`, `entered_date`, `document_date`, `promptly`, `weekend`, `nwh` are constant inside every entry (0 exceptions) → D13.
@@ -58,11 +58,29 @@ H2 input = selected feature groups + [J1, J2, J3, J4] columns from meta.
 - `promptly` agrees with `lag_days` bins (0 mismatches); `weekend` agrees with the weekday of `entered_date` (0 mismatches); `nwh_dist` > 0 exactly when `nwh` = 1.
 - Scaled values: FY1 in [0, 1]; FY2 `lag_days` max 0.80, `nwh_dist` max 1.05 (not clipped, D10).
 
-### Decision D13 — entry-level fields encoded once per entry (21 Nov 2026, from the data check)
+### Decision D13 — entry-level fields encoded once per entry (21 Nov 2026, from the data check; real-ledger note added 23 Nov)
 
 **Original plan:** `user` and `tax_rate` one-hot in every line slot (with PAD).
 
-**Change:** both are constant inside every entry, so they are encoded once per entry. Repeating them in 4 slots would count the same fact up to 4 times in every distance (LOF, kNN), give `user` more weight than the accounts, and make 2-line and 3-line entries differ in user columns only because of padding. No information is lost.
+**Change:** both are constant inside every entry in this dataset, so they are encoded once per entry. Repeating them in 4 slots would count the same fact up to 4 times in every distance (LOF, kNN), give `user` more weight than the accounts, and make 2-line and 3-line entries differ in user columns only because of padding. No information is lost on this dataset.
+
+**Important: the two fields are entry-level for different reasons (Mohsen, 23 Nov).**
+
+| Field | Entry-level in this dataset | Entry-level in a real ledger? |
+|---|---|---|
+| `user`, dates (`document_date`, `posting_date`, `entered_date`) | yes | **Yes** — header data of the document. In SAP they are stored once per document in the header table BKPF (user name, document / posting / entry date); line items are in BSEG, linked by client, company code, fiscal year and document number. |
+| `tax_rate` | yes | **No** — the tax code is a line-item field (SAP BSEG-MWSKZ, "Tax on sales/purchases code"). One document can carry several rates (e.g. an invoice with 7% and 19% items in Germany), and vendor / customer lines and bank lines normally carry no tax code at all (SAP shows "**" in the vendor line of an invoice, SAP KBA 1882126). |
+
+**Data check that shows `tax_rate` is a generator property (23 Nov, journal_entries_4203.csv):** the rate is set per transaction and copied to every line, including lines that would have no tax code in a real system: 0.19 on 65,843 Trade payables (1600) lines, 38,919 Bank (1100) lines and 35,949 Trade receivables (1400) lines. Rate 0.00 appears only in 389 entries (payroll, social security, rent and their bank lines). So `tax_rate` here means "taxable at 19% / tax-exempt transaction type", not a line-level tax code.
+
+**`tax_rate` adds no information beyond the accounts (23 Nov):** it is fully determined by the set of accounts in an entry (0 of 27 account combinations have more than one rate); the SKR03 accounts already carry the rate in their names (e.g. 3400 "Cost of merchandise, 19% input tax", 1576 "Deductible input tax, 19%", 1776 "VAT, 19%"). So the simplification has no effect on the results: the models do not learn anything from `tax_rate` that they do not already see in the accounts. Asked as Q4 in `questions_for_dataset_authors.md`.
+
+**Consequences:**
+- For this dataset, encoding `tax_rate` once per entry is correct and loses nothing.
+- The code is safe for other data: notebook 02 asserts that every entry-level field has one value per entry; on a ledger with mixed rates it stops with an error instead of silently taking the first line's rate. For a real ledger, `tax_rate` would move into the line slots (per-slot one-hot with PAD).
+- Mixed tax rates inside one entry, or a rate that does not fit the account (e.g. 7% on an account that should be 19%), could themselves be anomaly signals in real data; this dataset cannot test that → Limitations / Future Work (section F).
+
+**Thesis sentence (draft, Ch. 3):** "In the synthetic ledger, the user, the dates and the tax rate are identical on all lines of an entry and are therefore encoded once per entry. For the user and the dates this matches real ERP systems, where they are document header fields; the tax rate, however, is a line-item attribute in real ledgers (e.g. SAP BSEG-MWSKZ) and would have to be encoded per line slot there."
 
 ### Feature groups and switches (decided 21 Nov 2026, Mohsen)
 
@@ -77,7 +95,7 @@ All candidate features are computed once and stored together in `X_onehot.npz`. 
 | `hour_cyc` | `hour_sin`, `hour_cos` | off (see D11) | standard technique; ablation |
 | `wday_cyc` | `wday_sin`, `wday_cos` | off (see D11) | standard technique; ablation |
 
-In code (`src/features.py`): `FEATURE_GROUPS_MAIN`, `select_columns(X, feature_info, groups)`, `groups_label(groups)`.
+In code (`src/encode.py`): `FEATURE_GROUPS_MAIN`, `select_columns(X, feature_info, groups)`, `groups_label(groups)`.
 
 Every row in `results/runs.csv` stores the active groups (column `feature_groups`, e.g. `lines+calendar_flags+lag_days`), so each result can be traced to its feature set.
 
@@ -118,7 +136,7 @@ For an accountant these are the same booking, and they should be treated the sam
 
 Example from the data (entry `a_1`, purchase of goods): CSV order = D 3400 Cost of merchandise 112.42, D 1576 Deductible input tax 21.36, C 1600 Trade payables 133.78. D9 order = D 1576, D 3400, C 1600.
 
-The tie-break (same side and same account twice) is never needed in this ledger (0 cases), but it stays in the code so the rule is complete.
+The tie-break (same side and same account twice) is never needed in this ledger (0 cases), but it stays in the code so the rule is complete. In real ledgers it is needed (e.g. several expense lines on the same account), see F.
 
 **Thesis sentence (draft):** "Before padding, the lines of each entry are sorted by debit/credit side, account number and amount, so that each slot has the same meaning in every entry and two entries with the same content always receive the same vector."
 
@@ -191,7 +209,7 @@ The tie-break (same side and same account twice) is never needed in this ledger 
 
 **Note on switches:** the embedding cannot switch single features off after encoding; the content of `entry_text` is fixed when the embeddings are computed. To keep RQ2 fair, `entry_text` should contain the same information as the main one-hot setting (e.g. "weekend: no, after hours: yes, lag 12 days" rather than the exact clock time). Decide the exact template in the embedding notebook and write it down here; a second embedding file with exact time is optional (Cut List).
 
-### Decision D1 — free-text `text` field (confirmed by Smitha and Nazneen, 19 Nov 2026)
+### Decision D1 — free-text `text` field (proposed 21 Nov 2026, Mohsen; NOT yet confirmed by Smitha and Nazneen — an earlier note saying 'confirmed 19 Nov' was wrong)
 
 Exclude `text` from both encodings (B and C).
 
@@ -234,11 +252,26 @@ Optional if time allows: ablation of the embedding with vs without `text`.
 
 **Rationale.** H1 (Gronewald et al., 2024) needs a yes/no ML flag. A fixed threshold avoids tuning on labels and is easy to explain to an auditor.
 
-## Open decisions for supervisors (status 21 Nov 2026)
+## F. Limitations: dataset properties vs real accounting practice (collect here; for Ch. 5 Discussion / Limitations)
+
+Every choice that is valid only because of how the synthetic ledger was generated. Each entry: what the dataset does → what a real ledger does → consequence for the thesis.
+
+| # | Topic | In this dataset | In a real ledger | Consequence / what to write |
+|---|---|---|---|---|
+| L1 | Tax rate level (D13) | one rate per entry, copied to every line (also payables, receivables, bank lines); only 0.19 and 0.00 | tax code per line item (SAP BSEG-MWSKZ); mixed rates in one document; vendor / customer / bank lines without tax code | encoded once per entry here; per line slot on real data. Fully determined by the accounts here, so no effect on results. Mixed or mismatched tax codes as an anomaly signal cannot be tested (Future Work). Dataset authors: Q4. |
+| L2 | Number of lines | 2–3 lines, only one entry with 4 lines | documents with many lines are common (e.g. payroll, collective invoices) | padding to a fixed 4 slots does not scale; a long-tail line count needs another encoding (aggregation per account × side, or sequence / set models) → Future Work. The single 4-line entry may become an encoding-made false positive. |
+| L3 | Tie-break in line order (D9) | never needed (no entry has two lines with the same side and account) | common (several lines on the same expense account) | rule kept complete in code; untested here. |
+| L4 | Distance outside working hours (D11) | non-working times drawn uniformly, no gradient | unknown; adversarial argument suggests fraudsters stay near working hours | `nwh_dist` only as ablation; synthetic data cannot show a distance effect. |
+| L5 | Free text (D1) | 10 item names + monthly texts | rich, varied posting texts | excluded; results say nothing about text-based detection on real ledgers. |
+| L6 | Relational anomalies (M8, `ref_id`) | M8 linked via `ref_id` | linked documents (invoice ↔ payment, reversals) are central in audits | out of scope; entry-level encodings cannot see them. |
+| L7 | Working-hour window | flag window 08:00–17:59; generator description starts non-working time at 17:00 | company-specific (shifts, time zones, batch jobs) | follow the dataset flag; question to dataset authors. |
+| L8 | Labels | injected anomalies with known types M1–M8 | labels rarely known; anomalies ≠ fraud | evaluation only possible on synthetic data; external validity limited. |
+
+## Open decisions for supervisors (status 23 Nov 2026)
 
 1. D4 + D11: keep `promptly`, `weekend`, `nwh`, add `lag_days`; `nwh_dist` and sin/cos built as switchable groups, off in the main setting, shown as ablation — **real question** (changes the proposal).
-2. D3, D6, D7, D9, D10, D13: defaults above, Mohsen agrees (D6, D7, D9 explicitly) — send as "I will use these unless you object".
-3. `ref_id`-based relational features for M8 — out of scope (proposal), mention as limitation.
+2. D1, D3, D6, D7, D9, D10, D13: proposals / defaults above, Mohsen agrees (D6, D7, D9 explicitly) — send as "I will use these unless you object".
+3. `ref_id`-based relational features for M8 — out of scope (proposal), mention as limitation (L6).
 
 ## Storage convention
 
