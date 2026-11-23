@@ -4,6 +4,7 @@ scikit-learn
 scipy
 matplotlib
 tabulate
+pytest
 # laptop only (embeddings + autoencoder):
 torch
 sentence-transformers

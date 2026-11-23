@@ -57,10 +57,12 @@ gl-anomaly-ranking/
 - `src/load.py`: load posting lines and build one row per journal entry (raw-derived fields only)
 - `src/jets.py`: J1–J4 implemented from raw fields (validation against the dataset rule attributes, used in notebook 01)
 - `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`)
+- `src/metrics.py`: budget-based metrics (P@k, R@k, FP@k, AP; random tie-break over 5 seeds) and `append_runs` → `results/runs.csv`
+- `tests/test_metrics.py`: hand-checkable tests for the metrics (toy ranking computed on paper)
 - `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation against `src/jets.py`, `data/derived/meta.parquet` + `jet_validation.csv`
 - `notebooks/02_encoding_onehot.ipynb`: one-hot + padding encoding → `data/derived/X_onehot.npz` + `onehot_features.json`
 
-**Planned:** `src/metrics.py`, `src/detectors.py`, `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
+**Planned:** `src/detectors.py`, `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
 
 ## Rules
 
@@ -75,6 +77,7 @@ gl-anomaly-ranking/
 
 ```bash
 pip install -r requirements.txt
+python -m pytest tests -q        # metric tests must pass before any result is trusted
 ```
 
 Then run the notebooks in `notebooks/` in order (01, 02, …). Each notebook finds the project root itself, so it runs from `notebooks/`, the project root or Colab.

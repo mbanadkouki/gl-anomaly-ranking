@@ -1,3 +1,5 @@
+> **Last updated: 2026-11-23 16:50 (Berlin)** — D14 metric conventions (src/metrics.py) + first real-data check of the JET-only and random baselines
+
 # Feature engineering plan (draft, 19 Nov 2026; updated 23 Nov 2026: D13 dataset-vs-real-ledger note, section F Limitations)
 
 To discuss with supervisors before implementation (week 2). Rule: the raw CSV is never modified; everything is stored in derived files keyed by `posting_id`, in the row order of `meta.parquet`.
@@ -246,6 +248,35 @@ Optional if time allows: ablation of the embedding with vs without `text`.
 
 **What to write.** The sweep shows how stable the result is around 0.5; if a different α is clearly better on FY1, it can be noted, but the main result stays at the pre-set 0.5.
 
+### Decision D14 — metric conventions (23 Nov 2026, implemented in `src/metrics.py`)
+
+**Choice.**
+- Budgets k = 50, 100, 250, 500 reviewed entries, plus 1 % and 5 % of the ledger of the evaluated year (FY2024: 514 / 2,568). Budgets are absolute because they stand for auditor capacity, which does not depend on the method's list length.
+- P@k = anomalies in the top k / reviewed entries; FP@k = reviewed − anomalies; R@k = anomalies in the top k / **all** anomalies of the year; AP = mean precision at each hit / **all** anomalies of the year.
+- Ties are broken by a seeded random order; results are the mean (and SD) over 5 seeds. Never by row order.
+- An entry with NaN score is not on the method's list and is never reviewed; if the list is shorter than k, n_reviewed < k.
+- Every run row in `results/runs.csv` stores the git commit (`+dirty` if uncommitted changes).
+
+**Options considered and why.**
+
+| Question | Options | Chosen | Why |
+|---|---|---|---|
+| Recall denominator | all anomalies of the year / only anomalies inside the JET list | all | Anomalies a prefilter cannot reach must count as missed; the 93.9 % ceiling then shows directly in the numbers (RQ3). Example: a prefilter that finds all 396 in-JET anomalies of FY2024 still has recall 396 / 427 = 92.7 %. |
+| Tie-break | row order / random with seeds | random, 5 seeds | Row order is CSV order and can carry generator structure, which would make a method look better or worse by accident. 21,387 JET entries share h = 1, so ties are the normal case for JET-only. |
+| Budget | absolute / share of each method's list | absolute (+ 1 % / 5 % of the ledger) | The auditor's capacity is the same for every method. |
+
+**Tests.** `tests/test_metrics.py`, 11 tests on a toy ranking computed by hand (10 entries, 3 anomalies at positions 1, 4, 7: P@4 = 0.5, R@4 = 2/3, AP = (1/1 + 2/4 + 3/7) / 3 = 0.643), plus NaN entries, ties and budgets.
+
+**Real-data check (23 Nov, FY2024, 51,365 entries, 427 anomalies; mean of 5 seeds):**
+
+| Method | P@50 | P@500 | R@5 % | AP | Expected |
+|---|---|---|---|---|---|
+| Random, whole ledger | 0.016 | 0.011 | 0.053 | 0.009 | base rate 0.83 % |
+| Random inside JET union | 0.044 | 0.030 | 0.172 | 0.030 | union precision 3.3 % |
+| JET-only (h, random ties) | 0.480 | 0.112 | 0.358 | 0.092 | h ≥ 3: 56 entries, 27 anomalies (48 %) |
+
+All three match the expected rates, so the metrics are trusted. JET-only is strong only in its top ~56 entries; after that it is close to random inside the union, which is the gap the ML ranking must close (RQ1).
+
 ### Decision D3 — H1 threshold (default; to confirm; needed from week 3)
 
 **Choice.** H1 flags an entry when it is in a JET AND in the top 5% of ML scores; the flagged entries are ranked by ML score. The 5% is fixed in advance.
@@ -265,6 +296,7 @@ Every choice that is valid only because of how the synthetic ledger was generate
 | L5 | Free text (D1) | 10 item names + monthly texts | rich, varied posting texts | excluded; results say nothing about text-based detection on real ledgers. |
 | L6 | Relational anomalies (M8, `ref_id`) | M8 linked via `ref_id` | linked documents (invoice ↔ payment, reversals) are central in audits | out of scope; entry-level encodings cannot see them. |
 | L7 | Working-hour window | flag window 08:00–17:59; generator description starts non-working time at 17:00 | company-specific (shifts, time zones, batch jobs) | follow the dataset flag; question to dataset authors. |
+| L9 | Transfer to a real company (Mohsen, 23 Nov) | 6 users, 25 accounts; M1–M6 are built so that an unusual user for the context is the signal | hundreds of accounts and users, new / leaving employees, system users for batch postings | **The method transfers, the fitted model does not:** unsupervised detectors are fitted on each company's own ledger (and each year, D6), so `user` and `gl_account` are learned as "what is normal here", e.g. which user usually posts to which account. Not transferable: the synthetic labels and the hyperparameters tuned on them. Open questions on real data: (a) one-hot dimension grows with many accounts / users → group accounts by chart class (e.g. SKR03 account class) or use frequency encoding; sentence embeddings can also place a new account by its name (supports RQ2); (b) new users and batch users look novel → false positives; (c) whether "unusual user for this account" really marks fraud is unknown on real data — the precision found here is an upper-bound estimate, not a prediction. |
 | L8 | Labels | injected anomalies with known types M1–M8 | labels rarely known; anomalies ≠ fraud | evaluation only possible on synthetic data; external validity limited. |
 
 ## Open decisions for supervisors (status 23 Nov 2026)
