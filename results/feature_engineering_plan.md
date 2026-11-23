@@ -1,4 +1,4 @@
-> **Last updated: 2026-11-23 19:00 (Berlin)** — D16 final: list template based on Bakumenko et al. (2025) with three changes; exact Bakumenko format (codes) as ablation; which anomaly types the sentence can affect (M1, M7)
+> **Last updated: 2026-11-23 19:20 (Berlin)** — notebook 04 run (laptop): first embedding similarities; M7 hypothesis not supported at this level, T-Bak compresses all patterns, scale gap for D17
 
 # Feature engineering plan (draft, 19 Nov 2026; updated 23 Nov 2026: D13 dataset-vs-real-ledger note, section F Limitations)
 
@@ -264,7 +264,21 @@ All templates give the same 29 distinct sentences (the number of account / side 
 
 **Which anomaly types the sentence can affect (data check, 23 Nov).** M3, M4, M5, M6 and M8 sit inside the five most frequent normal patterns (purchase, payment, sale, receipt, cash payment): their signal is user, time or amount, so only the columns can reveal them, whatever the sentence. Only **M1** (purchase or rent paid from cash-in-hand: patterns "… Credit Cash-in-hand", 56 + 2 entries, all anomalous) and **M7** (rare bank account 1200 "Bank": 4 patterns, 60 entries, all anomalous) change the account pattern.
 - M1: "Cash-in-hand" and "Trade payables" have different meanings, so the embedding places the M1 patterns away from the normal purchase pattern — expected to help.
-- **M7 risk:** the anomalous account "Bank" (1200) and the normal "Bank (Postbank)" (1100) mean almost the same, so the embedding places them close together and may hide M7; in one-hot, 1200 is simply a different account. This is a known weakness of semantic similarity ("wrong but similar" account) and the main hypothesis for the T-Bak ablation. Report it as a finding, do not change the names to avoid it.
+- **M7 risk (hypothesis before the run):** the anomalous account "Bank" (1200) and the normal "Bank (Postbank)" (1100) mean almost the same, so the embedding could place them close together and hide M7; in one-hot, 1200 is simply a different account. **Not supported by the first similarity check (below): sentence length matters more than this semantic closeness.** Do not change the names; the week-3 detector results decide.
+
+**First result (notebook 04, cell_04_06, run 23 Nov on the laptop, all-MiniLM-L6-v2).** Cosine similarity and Euclidean distance (d = √(2 − 2·cos)) between a normal pattern and a changed one:
+
+| Pair | T-C cos | T-C d | T-Bak cos | T-Bak d | one-hot account block d |
+|---|---|---|---|---|---|
+| M7: "Credit Bank" vs normal "Credit Bank (Postbank)" (2 lines) | 0.950 | 0.32 | 0.986 | 0.17 | 1.41 (one slot differs) |
+| M1: "Credit Cash-in-hand" vs normal "Credit Trade payables" (3 lines) | 0.972 | 0.24 | 0.989 | 0.15 | 1.41 (one slot differs) |
+| reference: payment vs receipt (all lines differ) | 0.892 | 0.47 | 0.982 | 0.19 | 2.00 |
+
+Readings:
+- **The M7 hypothesis is not supported at this level.** In T-C, the M7 pattern is *further* from its normal pattern than the M1 pattern is from its own (0.32 vs 0.24). The stronger effect is **sentence length**: with mean pooling, one changed line out of three (M1) moves the vector less than one changed line out of two (M7). Semantics ("Bank" ≈ "Bank (Postbank)") is visible, but weaker than this dilution. Whether the detectors find M1 / M7 is decided in week 3, not here.
+- **T-Bak compresses all patterns** (all similarities 0.98–0.99, distances 0.15–0.19, even for completely different bookings): the repeated `Account_DC:` prefix and the meaningless code tokens make all sentences alike — the effect expected in change 2 of D16, now measured. T-C keeps about 2.5× larger distances.
+- **Scale gap for D17:** T-C distances between patterns are 0.2–0.5, while the one-hot account block gives 1.4–2.0 for the same pairs. Without scaling, the account information would weigh much less in the embedding encoding than in the one-hot encoding → supports option (a) of D17 (scale the embedding to the distance level of the one-hot account block). MiniLM cosine values sit in a narrow high range, so absolute values are not comparable across models.
+- Run time: 45 s for the first template (incl. model download, ~90 MB), 0.9 s for the second.
 
 **Thesis text (draft, Ch. 3):** "The sentence template follows Bakumenko et al. (2025): the lines of an entry are listed one after another. Three changes are made: the account name replaces the account code, the side is written as the word Debit or Credit instead of a suffix and without a repeated field prefix, and lines are separated by a semicolon because account names contain commas. As in Bakumenko et al., other templates are not searched; the exact original format with account codes is reported as an ablation."
 
