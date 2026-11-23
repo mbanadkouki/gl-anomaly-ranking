@@ -1,4 +1,4 @@
-> **Last updated: 2026-11-23 16:50 (Berlin)** — D14 metric conventions (src/metrics.py) + first real-data check of the JET-only and random baselines
+> **Last updated: 2026-11-23 17:05 (Berlin)** — D15 detector tuning (duplicates set the LOF grid) + first baseline results FY2024 (notebook 03)
 
 # Feature engineering plan (draft, 19 Nov 2026; updated 23 Nov 2026: D13 dataset-vs-real-ledger note, section F Limitations)
 
@@ -277,6 +277,35 @@ Optional if time allows: ablation of the embedding with vs without `text`.
 
 All three match the expected rates, so the metrics are trusted. JET-only is strong only in its top ~56 entries; after that it is close to random inside the union, which is the gap the ML ranking must close (RQ1).
 
+### Decision D15 — detector hyperparameters (23 Nov 2026, implemented in `src/detectors.py`)
+
+**Choice.** Small grids, chosen by mean AP over 5 seeds on FY1 (2023) only, then used unchanged on FY2 (2024).
+
+| Detector | Grid | Chosen on FY1 | FY1 AP |
+|---|---|---|---|
+| Isolation Forest | 100 trees / 256 samples; 300 / 256; 300 / 2,048 | 300 trees, 2,048 samples per tree | 0.064 |
+| LOF | k = 50, 100, 200 | k = 50 | 0.098 |
+
+**Why small grids.** Few settings keep the run time low (one IF fit ≈ 1–2 s, one LOF fit ≈ 11 s per year) and are easy to justify; a large search on FY1 labels would move the method towards supervised tuning.
+
+**Challenge found: duplicates set the LOF grid.** After encoding, many entries are identical (amount = quantity × fixed price; salaries repeat monthly): in FY2023 only 24,207 of 51,064 vectors are unique, 36,137 entries have an identical twin, and the largest group of identical entries has 36 members (same in FY2024). For LOF, a point with k or more identical neighbours has k-distance 0, which makes the density estimate unstable; scikit-learn warns about it. Campos et al. (2016, "On the evaluation of unsupervised outlier detection", section 4.1 Duplicates) describe the same problem. Options: (a) remove duplicates — loses the density of repeated normal bookings; (b) add noise — changes the data; (c) use k larger than the largest duplicate group — **chosen**. The usual k = 10–20 is therefore not possible; the grid starts at 50 and `src/detectors.py` refuses a k that is not larger than the largest group. Note for ablations: with all feature groups the largest group is 6; in the proposal variant (without calendar features) it is 187, so LOF there needs k ≥ 200.
+
+### Baseline results FY2024 (notebook 03, 23 Nov, main one-hot set, mean of 5 seeds)
+
+| Method | AP | P@50 | P@100 | P@250 | P@500 | P@5 % | R@5 % | FP@500 |
+|---|---|---|---|---|---|---|---|---|
+| Random, whole ledger | 0.009 | 0.016 | 0.012 | 0.013 | 0.011 | 0.009 | 0.053 | 495 |
+| Random inside JET union | 0.030 | 0.044 | 0.038 | 0.030 | 0.030 | 0.029 | 0.172 | 485 |
+| JET-only | 0.092 | **0.480** | 0.300 | 0.162 | 0.112 | 0.060 | 0.358 | 444 |
+| Isolation Forest (model-only) | 0.061 | 0.000 | 0.014 | 0.020 | 0.068 | 0.073 | 0.439 | 466 |
+| LOF (model-only) | **0.125** | 0.380 | **0.380** | **0.324** | **0.196** | **0.089** | **0.534** | **402** |
+
+**First readings (to confirm with the full grid and bootstrap CIs in weeks 4–5):**
+- JET-only wins only at the smallest budget (k = 50, its h ≥ 3 entries); from k = 100 on, LOF finds more anomalies with fewer false positives (FP@500: 402 vs 444).
+- LOF's top 5 % holds 23 of the 31 FY2024 anomalies that lie outside the JET union — a JET prefilter would lose them (RQ3 preview).
+- Isolation Forest is weak at the top of the list (P@50 = 0): its first entries are rare but normal structures. To look at in week 3 (which entries rank first).
+- The single 4-line entry `p_2` ranks 202 in LOF (inside the top 250) and 1,970 in IF — the expected false positive made by the encoding is visible for LOF.
+
 ### Decision D3 — H1 threshold (default; to confirm; needed from week 3)
 
 **Choice.** H1 flags an entry when it is in a JET AND in the top 5% of ML scores; the flagged entries are ranked by ML score. The 5% is fixed in advance.
@@ -297,6 +326,7 @@ Every choice that is valid only because of how the synthetic ledger was generate
 | L6 | Relational anomalies (M8, `ref_id`) | M8 linked via `ref_id` | linked documents (invoice ↔ payment, reversals) are central in audits | out of scope; entry-level encodings cannot see them. |
 | L7 | Working-hour window | flag window 08:00–17:59; generator description starts non-working time at 17:00 | company-specific (shifts, time zones, batch jobs) | follow the dataset flag; question to dataset authors. |
 | L9 | Transfer to a real company (Mohsen, 23 Nov) | 6 users, 25 accounts; M1–M6 are built so that an unusual user for the context is the signal | hundreds of accounts and users, new / leaving employees, system users for batch postings | **The method transfers, the fitted model does not:** unsupervised detectors are fitted on each company's own ledger (and each year, D6), so `user` and `gl_account` are learned as "what is normal here", e.g. which user usually posts to which account. Not transferable: the synthetic labels and the hyperparameters tuned on them. Open questions on real data: (a) one-hot dimension grows with many accounts / users → group accounts by chart class (e.g. SKR03 account class) or use frequency encoding; sentence embeddings can also place a new account by its name (supports RQ2); (b) new users and batch users look novel → false positives; (c) whether "unusual user for this account" really marks fraud is unknown on real data — the precision found here is an upper-bound estimate, not a prediction. |
+| L10 | Duplicate entries (D15) | 71 % of FY2023 entries (36,137 of 51,064) share their encoded vector with at least one other entry; largest group 36 | real ledgers also repeat bookings (salaries, rent, standard purchases), groups can be much larger | LOF needs k above the largest duplicate group; on real data k may have to be much larger, or duplicates handled explicitly (weights) → Future Work. |
 | L8 | Labels | injected anomalies with known types M1–M8 | labels rarely known; anomalies ≠ fraud | evaluation only possible on synthetic data; external validity limited. |
 
 ## Open decisions for supervisors (status 23 Nov 2026)

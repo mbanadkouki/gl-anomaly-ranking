@@ -58,11 +58,13 @@ gl-anomaly-ranking/
 - `src/jets.py`: J1–J4 implemented from raw fields (validation against the dataset rule attributes, used in notebook 01)
 - `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`)
 - `src/metrics.py`: budget-based metrics (P@k, R@k, FP@k, AP; random tie-break over 5 seeds) and `append_runs` → `results/runs.csv`
+- `src/detectors.py`: Isolation Forest and LOF (score: higher = more suspicious), tuning grids (D15), per-seed runner
 - `tests/test_metrics.py`: hand-checkable tests for the metrics (toy ranking computed on paper)
 - `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation against `src/jets.py`, `data/derived/meta.parquet` + `jet_validation.csv`
 - `notebooks/02_encoding_onehot.ipynb`: one-hot + padding encoding → `data/derived/X_onehot.npz` + `onehot_features.json`
+- `notebooks/03_baselines.ipynb`: random, JET-only, Isolation Forest, LOF; tuned on FY2023, reported on FY2024 → `results/runs.csv`
 
-**Planned:** `src/detectors.py`, `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
+**Planned:** `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
 
 ## Rules
 
