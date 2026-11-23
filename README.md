@@ -81,7 +81,7 @@ Then run the notebooks in `notebooks/` in order (01, 02, …). Each notebook fin
 
 ## Naming
 
-Notebooks are named by process step, not by week: `NN_step_name.ipynb` (`01_jets_meta`, `02_encoding_onehot`, `03_baselines`, …). Reusable modules in `src/` have no prefix. Only weekly reports and notes in `results/` carry a week prefix (`week01_`, `week02_`, …).
+Notebooks are named by process step, not by week: `NN_step_name.ipynb` (`01_jets_meta`, `02_encoding_onehot`, `03_baselines`, …). Every code cell starts with a label comment `# cell_NN_KK` (notebook NN, code cell KK, e.g. `cell_02_07` = 7th code cell of notebook 02); the same label is the cell's Jupyter id. Labels are fixed once given: a new cell inserted later gets a letter suffix (`cell_02_07a`) so that existing references stay valid. Reusable modules in `src/` have no prefix. Only weekly reports and notes in `results/` carry a week prefix (`week01_`, `week02_`, …).
 
 ## Status
 

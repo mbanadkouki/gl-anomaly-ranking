@@ -45,7 +45,7 @@ def sort_lines(lines: pd.DataFrame) -> pd.DataFrame:
     out = out.sort_values(
         ["posting_id", "_side", "gl_account", "amount", "csv_pos"],
         ascending=[True, True, True, False, True],
-        kind="mergesort",
+        kind="mergesort", # stable sort to preserve CSV order for equal values
     )
     out["slot"] = out.groupby("posting_id", sort=False).cumcount()
     return out.drop(columns="_side")
