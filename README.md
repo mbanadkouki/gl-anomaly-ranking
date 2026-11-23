@@ -59,10 +59,13 @@ gl-anomaly-ranking/
 - `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`)
 - `src/metrics.py`: budget-based metrics (P@k, R@k, FP@k, AP; random tie-break over 5 seeds) and `append_runs` → `results/runs.csv`
 - `src/detectors.py`: Isolation Forest and LOF (score: higher = more suspicious), tuning grids (D15), per-seed runner
+- `src/embed.py`: sentence construction (D16: T-C main, T-Bak ablation) and MiniLM embeddings, stored as unique sentences + per-entry index
+- `tests/test_embed.py`: tests for the sentence templates and the index
 - `tests/test_metrics.py`: hand-checkable tests for the metrics (toy ranking computed on paper)
 - `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation against `src/jets.py`, `data/derived/meta.parquet` + `jet_validation.csv`
 - `notebooks/02_encoding_onehot.ipynb`: one-hot + padding encoding → `data/derived/X_onehot.npz` + `onehot_features.json`
 - `notebooks/03_baselines.ipynb`: random, JET-only, Isolation Forest, LOF; tuned on FY2023, reported on FY2024 → `results/runs.csv`
+- `notebooks/04_encoding_embeddings.ipynb`: 29 distinct sentences → all-MiniLM-L6-v2 embeddings → `data/derived/emb_tc*.npy`, `emb_bak*.npy` (needs sentence-transformers)
 
 **Planned:** `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
 

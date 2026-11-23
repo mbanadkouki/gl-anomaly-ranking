@@ -1,4 +1,4 @@
-> **Last updated: 2026-11-23 17:05 (Berlin)** — D15 detector tuning (duplicates set the LOF grid) + first baseline results FY2024 (notebook 03)
+> **Last updated: 2026-11-23 19:00 (Berlin)** — D16 final: list template based on Bakumenko et al. (2025) with three changes; exact Bakumenko format (codes) as ablation; which anomaly types the sentence can affect (M1, M7)
 
 # Feature engineering plan (draft, 19 Nov 2026; updated 23 Nov 2026: D13 dataset-vs-real-ledger note, section F Limitations)
 
@@ -206,10 +206,84 @@ The tie-break (same side and same account twice) is never needed in this ledger 
 
 | Feature | How it is computed | Used in |
 |---|---|---|
-| `entry_text` | one string per entry from raw fields, e.g. user, weekday + time, lag, then per line "D/C account name amount tax" in the D9 line order (no `text` field, see D1) | input to the model only |
-| embedding | all-MiniLM-L6-v2, normalised, 384-d | IF, LOF, AE (embedding runs), RQ2 |
+| `entry_text` | one sentence per entry: the lines in D9 order, each as "Debit/Credit + account name", joined by "; " (D16) | input to the model only |
+| embedding | all-MiniLM-L6-v2, L2-normalised, 384-d | replaces the account/side block of the one-hot encoding (D16) |
+| other columns | exactly the non-account columns of `X_onehot.npz`: slot amounts, `n_lines`, user, tax rate, calendar flags, `lag_days` (and the switchable D11 groups) | appended next to the embedding (D16) |
 
-**Note on switches:** the embedding cannot switch single features off after encoding; the content of `entry_text` is fixed when the embeddings are computed. To keep RQ2 fair, `entry_text` should contain the same information as the main one-hot setting (e.g. "weekend: no, after hours: yes, lag 12 days" rather than the exact clock time). Decide the exact template in the embedding notebook and write it down here; a second embedding file with exact time is optional (Cut List).
+### Decision D16 — what goes into the sentence (23 Nov 2026, Mohsen + Claude)
+
+**Rule.** The sentence embedding replaces only the block "account and debit/credit side of each line" of the one-hot encoding. Every other column stays exactly as in the one-hot encoding and is appended next to the embedding. So RQ2 asks one clean question: is a semantic representation of the accounts (by their names) better than a one-hot representation (meaningless codes), with everything else equal?
+
+**Main template (T-C).** Text = the lines in D9 order, each "Debit" or "Credit" + account name, joined by "; ". Example, entry `a_1`:
+
+```
+Debit Deductible input tax, 19%; Debit Cost of merchandise, 19% input tax; Credit Trade payables.
+```
+
+Embedding of this text (384-d) + the non-account columns of the one-hot encoding (amounts per slot, `n_lines`, user, tax rate, `promptly`, `weekend`, `nwh`, `lag_days`).
+
+**Field by field — in the text or as a column?**
+
+| Field | In the text? | As a column? | Why |
+|---|---|---|---|
+| Account name | **yes** (name, not number) | no | Names carry accounting meaning ("Trade payables" is closer to "Bank" than to "Salaries"); numbers are codes without meaning for a language model. 25 accounts = 25 distinct names, so no information is lost. Names also let the model place an unseen account of another company by its name (L9). |
+| Debit / credit | **yes** (as the words "Debit" / "Credit") | no | Meaningful words; part of the line's identity. |
+| Amount, `lag_days` | no | **yes** (same scaled values as one-hot) | Language models treat numbers as ordinary tokens. Wallace et al. (2019, EMNLP, "Do NLP models know numbers?") find word embeddings encode magnitude only up to about 1,000 and BERT-type sub-word models less exactly; amounts here are often above 1,000 (e.g. 2,667.50). Thawani et al. (2021, NAACL, "Representing numbers in NLP") note that NLP systems rarely treat numbers specially. Bakumenko et al. (2025) state in their limitations that their sentence encoding covers categorical features and needs extension for numbers. Keeping the numbers as columns keeps their exact distances. |
+| `promptly`, `weekend`, `nwh` | no | **yes** | Turning them into words ("on time / delayed / very delayed") is the same binning as `promptly`, with the same jumps at 10 and 30 days (D4); the column values already carry this. |
+| User | no | **yes** (one-hot) | Needed: M1–M6 are each tied to a user who is unusual for the context (week 1: Max for M1 / M5, Fred for M2 / M3 / M6, David for M4). But a person's name has no accounting meaning for a language model; in the text it would only add accidental name similarities. |
+| Tax rate | no | **yes** (one-hot, as in one-hot encoding) | Fully determined by the accounts (L1); account names already contain "19%". Kept as a column only so the non-account block is identical to the one-hot encoding. |
+| Free text `text` | no | no | D1. |
+
+**Why the numbers are not simply dropped.** Removing amounts and delays from the embedding encoding would give it less information than the one-hot encoding; RQ2 would then compare the amount of information, not the representation.
+
+**Final format (decided 23 Nov, 19:00): Bakumenko et al. (2025) structure with three changes.** Bakumenko et al. concatenate per line `"Source: " + S + " Account_DC: " + A` (e.g. `Account_DC: 1576_D`), lines joined by ", "; they give no reason for this template and test no alternative (their Limitations). Following their structure keeps the work comparable; three changes, each with a reason:
+
+| # | Bakumenko et al. (2025) | This thesis | Why |
+|---|---|---|---|
+| 1 | account code (`1576`) | account name as in the chart of accounts, unchanged (`Deductible input tax, 19%`) | names carry accounting meaning; codes are arbitrary tokens. Names are used exactly as in the dataset (SKR03 chart), no cleaning, so no manual choice enters. |
+| 2 | side as suffix `_D` / `_C`, prefix `Account_DC:` on every line | words `Debit` / `Credit` in front of the name, no repeated prefix | `_D` / `_C` are almost meaningless tokens, so patterns that differ only in the side (e.g. Prepaid expenses ↔ Maintenance with sides swapped) would get nearly the same embedding. The repeated prefix adds identical tokens to every sentence; with mean pooling this makes all sentences more alike and weakens the difference between patterns. |
+| 3 | separator `, ` | separator `; ` and a final `.` | account names contain commas themselves ("Deductible input tax, 19%"), so a comma separator would be ambiguous. |
+| — | `Source:` field | not used | the dataset has no source-system field. |
+
+Main template (T-C), entry `a_1`:
+
+```
+Debit Deductible input tax, 19%; Debit Cost of merchandise, 19% input tax; Credit Trade payables.
+```
+
+**Templates compared.**
+
+| ID | Content | Role |
+|---|---|---|
+| **T-C** | list sentence above → embedding, plus the non-account one-hot columns | **main setting** (RQ2) |
+| T-A | the same sentence only, no columns | ablation: how much amounts, user and calendar features add |
+| T-Bak | exactly the Bakumenko et al. format with codes: `Account_DC: 1576_D, Account_DC: 3400_D, Account_DC: 1600_C` (+ the same columns) | ablation: value of account names vs codes; direct comparison with the reference paper |
+| T-B | everything inside the text, numbers as tokens (earlier plan) | **dropped** (numeracy sources above; columns carry the numbers) |
+
+All templates give the same 29 distinct sentences (the number of account / side patterns in the ledger), so each costs seconds to compute.
+
+**Which anomaly types the sentence can affect (data check, 23 Nov).** M3, M4, M5, M6 and M8 sit inside the five most frequent normal patterns (purchase, payment, sale, receipt, cash payment): their signal is user, time or amount, so only the columns can reveal them, whatever the sentence. Only **M1** (purchase or rent paid from cash-in-hand: patterns "… Credit Cash-in-hand", 56 + 2 entries, all anomalous) and **M7** (rare bank account 1200 "Bank": 4 patterns, 60 entries, all anomalous) change the account pattern.
+- M1: "Cash-in-hand" and "Trade payables" have different meanings, so the embedding places the M1 patterns away from the normal purchase pattern — expected to help.
+- **M7 risk:** the anomalous account "Bank" (1200) and the normal "Bank (Postbank)" (1100) mean almost the same, so the embedding places them close together and may hide M7; in one-hot, 1200 is simply a different account. This is a known weakness of semantic similarity ("wrong but similar" account) and the main hypothesis for the T-Bak ablation. Report it as a finding, do not change the names to avoid it.
+
+**Thesis text (draft, Ch. 3):** "The sentence template follows Bakumenko et al. (2025): the lines of an entry are listed one after another. Three changes are made: the account name replaces the account code, the side is written as the word Debit or Credit instead of a suffix and without a repeated field prefix, and lines are separated by a semicolon because account names contain commas. As in Bakumenko et al., other templates are not searched; the exact original format with account codes is reported as an ablation."
+
+**Selection rule.** As D6: any choice between templates uses FY1 labels only; FY2 results are reported for all templates that were run.
+
+**Data check (23 Nov, 18:45): the T-C text has only 29 distinct sentences** in the whole ledger (the same 29 with account numbers instead of names; 25 accounts = 25 names). The most frequent: "Debit Deductible input tax, 19%; Debit Cost of merchandise, 19% input tax; Credit Trade payables." (32,944 entries); 9 patterns occur in 20 entries or fewer; anomalies appear in 12 of the 29 patterns. Consequences:
+- **The embedding block is a semantic embedding of the booking pattern.** It has only 29 distinct vectors. The one-hot account block also has at most 29 distinct combinations. So in this dataset RQ2 compares the *geometry between 29 patterns*: in one-hot, patterns differ by the number of changed slots; in the embedding, by the meaning of the account names. State this plainly in Ch. 3 and in the discussion of RQ2.
+- **Computing the embeddings is trivial:** 29 sentences, seconds on a laptop CPU; no GPU or Colab needed.
+- **D17 becomes easier:** 29 points span at most 28 dimensions, so PCA of the embedding to at most 28 components loses no information and reduces the Isolation Forest problem from 384 to ≤ 28 dimensions.
+- **Limitation L12:** with so few patterns, the room for a semantic encoding to help is small; on a real ledger with hundreds of accounts and many more patterns the difference can be larger.
+
+**Note (other chat, 23 Nov, "Anomaly detection reconstruction methods"):** that chat first put user and tax rate inside the text (embedding replaces accounts, D/C, user and tax). D16 supersedes it: user and tax rate are columns, because a person's name has no accounting meaning and the tax rate is determined by the accounts. The same chat confirmed: slot amounts (not one total amount) and `n_lines` as columns, so T-C matches the one-hot columns exactly.
+
+**Still open (D17): weight of the two blocks.** The embedding (384 dimensions, length 1) and the columns (11 numeric / flag columns + user and tax one-hot) differ in scale AND in number of dimensions. Two separate effects:
+- distance-based detectors (LOF) and the autoencoder: the block with the larger spread of distances dominates → can be fixed by scaling a block;
+- Isolation Forest picks a random feature at each split, so with 384 embedding dimensions the ~19 other columns are rarely chosen, whatever their scale → scaling does not fix this; only fewer embedding dimensions does.
+Options to compare: (a) scale the embedding so its median pairwise distance on an FY1 sample equals that of the one-hot account block; (b) PCA on the embedding only, fitted on FY1, to a fixed number of components chosen without labels (e.g. 90 % variance or a fixed 16), then append the columns (proposed in the other chat; addresses the IF problem and is the main reason for a PCA step); (c) both. The PCA must not include the numeric columns, so the two blocks stay interpretable. To decide before notebook 04 is run.
+
+**Idea noted, not in the plan:** amount relative to the account (z-score of log amount within the main debit account), because EUR 22,500 is normal for rent but not for a rake. Only as ablation or Future Work.
 
 ### Decision D1 — free-text `text` field (proposed 21 Nov 2026, Mohsen; NOT yet confirmed by Smitha and Nazneen — an earlier note saying 'confirmed 19 Nov' was wrong)
 
@@ -327,6 +401,8 @@ Every choice that is valid only because of how the synthetic ledger was generate
 | L7 | Working-hour window | flag window 08:00–17:59; generator description starts non-working time at 17:00 | company-specific (shifts, time zones, batch jobs) | follow the dataset flag; question to dataset authors. |
 | L9 | Transfer to a real company (Mohsen, 23 Nov) | 6 users, 25 accounts; M1–M6 are built so that an unusual user for the context is the signal | hundreds of accounts and users, new / leaving employees, system users for batch postings | **The method transfers, the fitted model does not:** unsupervised detectors are fitted on each company's own ledger (and each year, D6), so `user` and `gl_account` are learned as "what is normal here", e.g. which user usually posts to which account. Not transferable: the synthetic labels and the hyperparameters tuned on them. Open questions on real data: (a) one-hot dimension grows with many accounts / users → group accounts by chart class (e.g. SKR03 account class) or use frequency encoding; sentence embeddings can also place a new account by its name (supports RQ2); (b) new users and batch users look novel → false positives; (c) whether "unusual user for this account" really marks fraud is unknown on real data — the precision found here is an upper-bound estimate, not a prediction. |
 | L10 | Duplicate entries (D15) | 71 % of FY2023 entries (36,137 of 51,064) share their encoded vector with at least one other entry; largest group 36 | real ledgers also repeat bookings (salaries, rent, standard purchases), groups can be much larger | LOF needs k above the largest duplicate group; on real data k may have to be much larger, or duplicates handled explicitly (weights) → Future Work. |
+| L11 | Tax line amounts (other chat, 23 Nov) | in all 51,253 entries with a tax line, the tax amount equals net × rate exactly (0 mismatches); no anomaly type manipulates the tax amount | wrong or manipulated tax amounts are a real audit risk (VAT fraud, wrong rates) | tax-amount anomalies cannot be tested on this dataset → Future Work; the tax line stays in the encoding as a normal line (slot + sentence). |
+| L12 | Number of booking patterns (D16) | 29 distinct account / side patterns in the whole ledger | hundreds of accounts, many more patterns, unseen accounts | the embedding can only change the distances between 29 patterns; RQ2 results are a lower bound for what semantic encodings can add on real ledgers. |
 | L8 | Labels | injected anomalies with known types M1–M8 | labels rarely known; anomalies ≠ fraud | evaluation only possible on synthetic data; external validity limited. |
 
 ## Open decisions for supervisors (status 23 Nov 2026)
