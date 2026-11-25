@@ -15,7 +15,8 @@ from sklearn.neighbors import LocalOutlierFactor
 
 from . import metrics
 
-# D15: small grids, chosen by mean AP on FY1 (2023) only
+# D15: small grids, chosen by mean AP on FY1 (2023) only; edge rule in edge_extension().
+# After the 25 Nov feature changes the grids must be re-run and the duplicate check redone.
 GRIDS = {
     "iforest": [
         {"n_estimators": 100, "max_samples": 256},
@@ -23,13 +24,36 @@ GRIDS = {
         {"n_estimators": 300, "max_samples": 2048},
     ],
     # k must be larger than the largest group of identical entries, otherwise the
-    # k-distance is 0 and LOF is unstable (Campos et al. 2016). Main one-hot set: max group = 36.
+    # k-distance is 0 and LOF is unstable (Campos et al. 2016). Old main set: max group = 36;
+    # re-check after the 25 Nov changes (fewer features -> groups may grow).
     "lof": [
         {"n_neighbors": 50},
         {"n_neighbors": 100},
         {"n_neighbors": 200},
     ],
 }
+
+
+def edge_extension(detector: str, best: dict, X=None) -> dict | None:
+    """D15 edge rule: if the FY1-best setting lies on the edge of its grid, return one
+    extra setting one step further out (to be evaluated on FY1 like the others), else None.
+
+    LOF: one step below the smallest k (k - 10), only if it still exceeds the largest
+    duplicate group of X. IF: twice the largest max_samples."""
+    grid = GRIDS[detector]
+    if detector == "lof":
+        ks = [g["n_neighbors"] for g in grid]
+        if best["n_neighbors"] == min(ks):
+            k = best["n_neighbors"] - 10
+            if X is not None and k <= max_duplicate_group(X):
+                return None
+            return {"n_neighbors": k}
+        if best["n_neighbors"] == max(ks):
+            return {"n_neighbors": 2 * best["n_neighbors"]}
+    if detector == "iforest":
+        if best["max_samples"] == max(g["max_samples"] for g in grid):
+            return {"n_estimators": best["n_estimators"], "max_samples": 2 * best["max_samples"]}
+    return None
 
 
 def max_duplicate_group(X) -> int:

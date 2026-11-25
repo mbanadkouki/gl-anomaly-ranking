@@ -1,10 +1,12 @@
 """One-hot + padding encoding of journal entries (notebook 02_encoding_onehot).
 
-Design decisions are documented in results/feature_engineering_plan.md:
+Design decisions are documented in the Decisions sheet of Thesis_Execution_Plan.xlsx
+(review of 25 Nov 2026):
   D9  line order inside the padding (debit first, then account, then amount desc)
-  D10 scalers fitted on FY1 only (FY2 values are not clipped)
-  D4  promptly / weekend / nwh kept as features, lag_days added
-  D11 nwh_dist, hour sin/cos, weekday sin/cos built as switchable groups
+  D10 scalers fitted per fiscal year, on the same entries the detector is fitted on (follows D6)
+  D4  time features = lag_days + weekend + nwh; promptly is NOT a feature (binning of lag_days)
+  D13 user once per entry; tax_rate is NOT a feature (determined by the accounts)
+  D11 nwh_dist, hour sin/cos, weekday sin/cos checked and dropped (built only for the data checks)
 
 Everything is aligned to the row order of data/derived/meta.parquet (posting_id).
 Fitted parameters are stored as JSON (no pickle).
@@ -23,15 +25,19 @@ from .load import WORK_START, WORK_END   # working window of the dataset flag nw
 MAX_LINES = 4   # longest entry in the ledger (1 entry has 4 lines)
 PAD = "PAD"
 
-# Main setting (D4, D11). Switch groups on/off per run with select_columns().
+# Main setting (D4, D11, D13; 25 Nov 2026). Switch groups on/off per run with select_columns().
 FEATURE_GROUPS_MAIN = {
-    "lines": True,           # per-slot account / side / amount, n_lines, user, tax_rate
-    "calendar_flags": True,  # promptly, weekend, nwh (dataset columns)
-    "lag_days": True,        # continuous entry lag
-    "nwh_dist": False,       # hours outside the working window (ablation)
-    "hour_cyc": False,       # hour_sin, hour_cos (ablation)
-    "wday_cyc": False,       # wday_sin, wday_cos (ablation)
+    "lines": True,           # per-slot account / side / amount, n_lines, user
+    "calendar_flags": True,  # weekend, nwh
+    "lag_days": True,        # continuous entry lag (D4)
+    "promptly": False,       # dropped (D4): deterministic binning of lag_days
+    "tax_rate": False,       # dropped (D13): deterministic function of the accounts
+    "nwh_dist": False,       # dropped (D11): no gradient in the data
+    "hour_cyc": False,       # dropped (D11)
+    "wday_cyc": False,       # dropped (D11)
 }
+# Proposal variant for the ablation without time features (D4): lines only.
+FEATURE_GROUPS_NO_TIME = {g: (g == "lines") for g in FEATURE_GROUPS_MAIN}
 ALL_GROUPS = list(FEATURE_GROUPS_MAIN)
 
 
@@ -59,9 +65,12 @@ def order_changes(sorted_lines: pd.DataFrame) -> pd.Series:
 
 # ---------------------------------------------------------------- scaling (D10)
 @dataclass
-class FY1Scaler:
-    """optional log1p -> robust (median / IQR) -> min-max, all fitted on FY1 values.
-    FY1 values end in [0, 1]; FY2 values may fall outside and are NOT clipped."""
+class Scaler:
+    """optional log1p -> robust (median / IQR) -> min-max.
+
+    D10 (25 Nov 2026): the scaler is part of the fitted pipeline and is fitted on the
+    same fiscal year as the detector, so every year is scaled with its own parameters
+    and ends in [0, 1]."""
     log1p: bool
     robust: bool
     median: float = 0.0
@@ -77,15 +86,15 @@ class FY1Scaler:
             x = (x - self.median) / self.iqr
         return x
 
-    def fit(self, x_fy1):
-        x = np.asarray(x_fy1, dtype=float)
+    def fit(self, x_year):
+        x = np.asarray(x_year, dtype=float)
         if self.log1p:
             x = np.log1p(x)
         if self.robust:
             q1, q3 = np.percentile(x, [25, 75])
             self.median = float(np.median(x))
             self.iqr = float(q3 - q1) if q3 > q1 else 1.0
-        z = self._pre(x_fy1)
+        z = self._pre(x_year)
         self.zmin, self.zmax = float(z.min()), float(z.max())
         if self.zmax == self.zmin:
             self.zmax = self.zmin + 1.0
@@ -127,10 +136,12 @@ def _onehot(values, categories):
     return sparse.csr_matrix((np.ones(n), (np.arange(n), idx)), shape=(n, len(categories)))
 
 
-def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame, fy1: int):
-    """Return (X csr float32, feature_info list, params dict).
+def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame):
+    """Return (X csr float32, feature_info list, params dict, sorted lines, entry table).
 
-    lines: raw posting lines (CSV), meta: meta.parquet, fy1: tuning year (e.g. 2023).
+    lines: raw posting lines (CSV), meta: meta.parquet. Numeric columns are scaled per
+    fiscal year (D10); category lists come from the whole ledger so both years have the
+    same columns (no labels involved).
     """
     sl = sort_lines(lines)
     ent = entry_table(lines, meta)
@@ -146,10 +157,24 @@ def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame, fy1: int):
     users = sorted(lines["user"].unique().tolist())
     taxes = sorted(lines["tax_rate"].unique().tolist())
 
-    amount_sc = FY1Scaler(log1p=True, robust=True).fit(sl.loc[sl["fy"] == fy1, "amount"])
-    is1 = (ent["fy"] == fy1).to_numpy()
-    lag_sc = FY1Scaler(log1p=True, robust=True).fit(ent.loc[is1, "lag_days_raw"])
-    dist_max = float(ent.loc[is1, "nwh_dist_raw"].max()) or 1.0
+    # per-year scaling (D10): fit and transform inside each fiscal year
+    years = sorted(ent["fy"].unique().tolist())
+    amount_scaled = np.zeros(len(sl))
+    lag_scaled = np.zeros(n)
+    dist_scaled = np.zeros(n)
+    scaler_params = {}
+    for fy in years:
+        m_line = (sl["fy"] == fy).to_numpy()
+        m_ent = (ent["fy"] == fy).to_numpy()
+        a_sc = Scaler(log1p=True, robust=True).fit(sl.loc[m_line, "amount"])
+        l_sc = Scaler(log1p=True, robust=True).fit(ent.loc[m_ent, "lag_days_raw"])
+        d_max = float(ent.loc[m_ent, "nwh_dist_raw"].max()) or 1.0
+        amount_scaled[m_line] = a_sc.transform(sl.loc[m_line, "amount"].to_numpy())
+        lag_scaled[m_ent] = l_sc.transform(ent.loc[m_ent, "lag_days_raw"].to_numpy())
+        dist_scaled[m_ent] = ent.loc[m_ent, "nwh_dist_raw"].to_numpy() / d_max
+        scaler_params[int(fy)] = {"amount": asdict(a_sc), "lag_days": asdict(l_sc),
+                                  "nwh_dist": {"divide_by_year_max": d_max}}
+    sl["amount_scaled"] = amount_scaled
 
     blocks, info = [], []
 
@@ -167,29 +192,30 @@ def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame, fy1: int):
         side = np.full(n, PAD, dtype=object)
         side[rows] = part["cd_flag"].to_numpy()
         amt = np.zeros(n)
-        amt[rows] = amount_sc.transform(part["amount"].to_numpy())
+        amt[rows] = part["amount_scaled"].to_numpy()
 
         acct_cats = [str(a) for a in accounts] + [PAD]
         add(_onehot(acct, acct_cats), [f"s{s+1}_acct_{a}" for a in acct_cats], "lines", s + 1)
         add(_onehot(side, ["D", "C", PAD]), [f"s{s+1}_cd_{c}" for c in ["D", "C", PAD]], "lines", s + 1)
         add(amt.reshape(-1, 1), [f"s{s+1}_amount"], "lines", s + 1)
 
-    # --- per-entry attributes (group "lines")
+    # --- per-entry attributes (group "lines", D13: once per entry)
     add(((ent["n_lines"].to_numpy() - 2) / (MAX_LINES - 2)).reshape(-1, 1), ["n_lines"], "lines")
     add(_onehot(ent["user"].to_numpy(), users), [f"user_{u}" for u in users], "lines")
-    add(_onehot(ent["tax_rate"].to_numpy(), taxes), [f"tax_{t:g}" for t in taxes], "lines")
+    # D13: tax_rate is a deterministic function of the accounts -> own group, off
+    add(_onehot(ent["tax_rate"].to_numpy(), taxes), [f"tax_{t:g}" for t in taxes], "tax_rate")
 
-    # --- calendar flags (D4)
-    add(((ent["promptly"].to_numpy() - 1) / 2).reshape(-1, 1), ["promptly"], "calendar_flags")
+    # --- calendar flags (D4); promptly is a binning of lag_days -> own group, off
+    add(((ent["promptly"].to_numpy() - 1) / 2).reshape(-1, 1), ["promptly"], "promptly")
     add(_onehot(ent["weekend"].to_numpy(), [0, 1, 2]),
         ["weekend_weekday", "weekend_sat", "weekend_sun"], "calendar_flags")
     add(ent["nwh"].to_numpy().reshape(-1, 1).astype(float), ["nwh"], "calendar_flags")
 
     # --- lag_days (D4)
-    add(lag_sc.transform(ent["lag_days_raw"]).reshape(-1, 1), ["lag_days"], "lag_days")
+    add(lag_scaled.reshape(-1, 1), ["lag_days"], "lag_days")
 
-    # --- D11 ablation groups
-    add((ent["nwh_dist_raw"].to_numpy() / dist_max).reshape(-1, 1), ["nwh_dist"], "nwh_dist")
+    # --- D11: checked and dropped (kept only so the data checks can be reproduced)
+    add(dist_scaled.reshape(-1, 1), ["nwh_dist"], "nwh_dist")
     a = 2 * np.pi * ent["hour_t"].to_numpy() / 24
     add(np.c_[np.sin(a), np.cos(a)], ["hour_sin", "hour_cos"], "hour_cyc")
     w = 2 * np.pi * ent["wday"].to_numpy() / 7
@@ -198,12 +224,11 @@ def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame, fy1: int):
     X = sparse.hstack(blocks, format="csr", dtype=np.float32)
     X.eliminate_zeros()
     params = {
-        "fy1": fy1,
+        "scaling": "per fiscal year (D10)",
         "max_lines": MAX_LINES,
         "line_order": "D before C, then gl_account asc, then amount desc, then CSV position (D9)",
         "categories": {"gl_account": accounts, "user": users, "tax_rate": taxes},
-        "scalers": {"amount": asdict(amount_sc), "lag_days": asdict(lag_sc),
-                    "nwh_dist": {"divide_by_fy1_max": dist_max}},
+        "scalers": scaler_params,
         "working_window": [WORK_START, WORK_END],
     }
     return X, info, params, sl, ent

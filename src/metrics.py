@@ -4,7 +4,7 @@ An auditor reviews the top k entries of a ranking (the review budget). For every
 method the metrics answer: how many of the k reviewed entries are anomalies, and
 how many anomalies of the whole fiscal year were found.
 
-Conventions (decided 23 Nov 2026, see results/feature_engineering_plan.md):
+Conventions (D14, decided 23 Nov 2026, budgets changed 25 Nov 2026):
   - Higher score = more suspicious. NaN score = entry is not on the method's list
     (e.g. outside the JET prefilter); it is never reviewed.
   - Ties are broken by a seeded random permutation, never by row order
@@ -12,8 +12,9 @@ Conventions (decided 23 Nov 2026, see results/feature_engineering_plan.md):
     over several seeds.
   - Recall and AP use ALL anomalies of the evaluated year as denominator, so an
     anomaly that a method cannot reach (e.g. outside the JET list) counts as missed.
-  - Budgets are absolute numbers of reviews (auditor capacity), plus 1 % and 5 %
-    of the ledger size of the evaluated year.
+  - Budgets are absolute numbers of reviews (auditor capacity), the same set as
+    Gronewald, Scherer et al. (2026): 25, 50, 100, 250, 500, 1,000, 2,000; main
+    budgets in the text are k = 100 and k = 1,000.
 """
 from __future__ import annotations
 
@@ -24,17 +25,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-BUDGETS_ABS = (50, 100, 250, 500)
-BUDGETS_REL = (0.01, 0.05)
+BUDGETS_ABS = (25, 50, 100, 250, 500, 1000, 2000)   # D14: same as the preprint
+MAIN_BUDGETS = ("k100", "k1000")
 SEEDS = (0, 1, 2, 3, 4)
 
 
-def budgets(n_entries: int) -> dict[str, int]:
-    """Budget label -> number of reviewed entries, e.g. {'k50': 50, ..., 'p1': 514, 'p5': 2568}."""
-    out = {f"k{k}": k for k in BUDGETS_ABS}
-    for p in BUDGETS_REL:
-        out[f"p{round(p * 100):d}"] = int(round(p * n_entries))
-    return out
+def budgets(n_entries: int | None = None) -> dict[str, int]:
+    """Budget label -> number of reviewed entries: {'k25': 25, ..., 'k2000': 2000}.
+
+    n_entries is kept for backward compatibility and is not used (no relative budgets since 25 Nov)."""
+    return {f"k{k}": k for k in BUDGETS_ABS}
 
 
 def review_order(scores, seed: int) -> np.ndarray:

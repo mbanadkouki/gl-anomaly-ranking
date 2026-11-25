@@ -75,9 +75,10 @@ def test_ties_are_not_broken_by_row_order():
     assert first != [0] * 5
 
 
-def test_budgets_for_fy2024_size():
+def test_budgets_are_the_preprint_set():
     b = m.budgets(51_365)
-    assert b == {"k50": 50, "k100": 100, "k250": 250, "k500": 500, "p1": 514, "p5": 2568}
+    assert b == {"k25": 25, "k50": 50, "k100": 100, "k250": 250, "k500": 500,
+                 "k1000": 1000, "k2000": 2000}
 
 
 def test_evaluate_and_summarise_shapes():
