@@ -244,9 +244,14 @@ def select_columns(X, feature_info, groups: dict):
     return X[:, keep], [feature_info[i]["name"] for i in keep]
 
 
+# Encoding version written into results/runs.csv. v2 = decisions review of 25 Nov 2026
+# (promptly and tax_rate dropped, per-year scalers); rows without a version are v1.
+ENCODING_VERSION = "v2"
+
+
 def groups_label(groups: dict) -> str:
-    """Short text for the feature_groups column in results/runs.csv."""
-    return "+".join(g for g in ALL_GROUPS if groups.get(g, False))
+    """Short text for the feature_groups column in results/runs.csv, e.g. 'lines+calendar_flags+lag_days@v2'."""
+    return "+".join(g for g in ALL_GROUPS if groups.get(g, False)) + f"@{ENCODING_VERSION}"
 
 
 def save_encoding(X, feature_info, params, x_path, json_path):
