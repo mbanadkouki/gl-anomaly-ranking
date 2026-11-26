@@ -23,6 +23,12 @@ def load_lines(path: Path = RAW) -> pd.DataFrame:
     return df
 
 
+def entry_amount(lines: pd.DataFrame) -> pd.Series:
+    """Size of each journal entry: the sum of its debit lines, indexed by posting_id."""
+    debit = lines["amount"].where(lines["cd_flag"] == "D", 0.0)
+    return debit.groupby(lines["posting_id"], sort=False).sum()
+
+
 def build_entries(lines: pd.DataFrame) -> pd.DataFrame:
     """One row per journal entry with the raw-derived fields the JETs and features need."""
     g = lines.groupby("posting_id", sort=False)
@@ -33,7 +39,10 @@ def build_entries(lines: pd.DataFrame) -> pd.DataFrame:
         "entered_date": first["entered_date"],
         "user": first["user"],
         "n_lines": g.size(),
-        "max_amount": g["amount"].max(),
+        # entry amount = sum of the debit lines (= sum of the credit lines in a balanced entry).
+        # In this ledger it equals the largest line for every entry (one side always has a single
+        # line, checked 26 Nov 2026); the debit sum is the definition that holds for any ledger.
+        "entry_amount": entry_amount(lines),
         "label": g["label"].max(),
         "marking": g["marking"].max(),
     })

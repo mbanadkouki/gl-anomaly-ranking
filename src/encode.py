@@ -114,7 +114,13 @@ ENTRY_COLS = ["document_date", "entered_date", "user", "tax_rate",
 def entry_table(lines: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
     """One row per entry in meta order. The ENTRY_COLS are constant inside every
     posting_id (checked in notebook 02), so the first line is taken."""
-    e = lines.groupby("posting_id", sort=False)[ENTRY_COLS].first()
+    g = lines.groupby("posting_id", sort=False)
+    # D13 guard: .first() is only correct if the field has one value per entry. On a ledger
+    # with, e.g., several tax rates in one document this stops instead of keeping line 1.
+    varying = [c for c in ENTRY_COLS if (g[c].nunique(dropna=False) > 1).any()]
+    if varying:
+        raise ValueError(f"not constant inside every entry (encode per line slot instead): {varying}")
+    e = g[ENTRY_COLS].first()
     e = e.reindex(meta["posting_id"].to_numpy())
     e["fy"] = meta["fy"].to_numpy()
     e["n_lines"] = meta["n_lines"].to_numpy()
@@ -247,6 +253,18 @@ def select_columns(X, feature_info, groups: dict):
     return X[:, keep], [feature_info[i]["name"] for i in keep]
 
 
+# Feature settings used in the experiments (main setting + ablations, Ch. 4). Defined once here
+# so that notebooks 02-10 and the result tables use the same names.
+ABLATIONS = {
+    "main": FEATURE_GROUPS_MAIN,
+    "main+nwh_dist": {**FEATURE_GROUPS_MAIN, "nwh_dist": True},
+    "main+hour_cyc": {**FEATURE_GROUPS_MAIN, "hour_cyc": True},
+    "main+wday_cyc": {**FEATURE_GROUPS_MAIN, "wday_cyc": True},
+    "main+promptly": {**FEATURE_GROUPS_MAIN, "promptly": True},
+    "no_time": FEATURE_GROUPS_NO_TIME,
+}
+
+
 # Encoding version written into results/runs.csv. v2 = decisions review of 25 Nov 2026
 # (promptly and tax_rate dropped, per-year scalers); v3 = redundancy check of 26 Nov
 # (n_lines dropped); rows without a version are v1.
@@ -254,18 +272,35 @@ ENCODING_VERSION = "v3"
 
 
 def groups_label(groups: dict) -> str:
-    """Short text for the feature_groups column in results/runs.csv, e.g. 'lines+calendar_flags+lag_days@v2'."""
+    """Short text for the feature_groups column in results/runs.csv, e.g. 'lines+calendar_flags+lag_days@v3'."""
     return "+".join(g for g in ALL_GROUPS if groups.get(g, False)) + f"@{ENCODING_VERSION}"
 
 
-def save_encoding(X, feature_info, params, x_path, json_path):
+def save_encoding(X, feature_info, params, x_path, json_path, posting_ids):
+    """Write the matrix (npz) and, in the JSON, the columns, fitted parameters, the encoding
+    version and the row order (posting_id of every row), so that later notebooks can check
+    that they use the file they expect (C19, review of 26 Nov 2026)."""
+    posting_ids = [str(p) for p in posting_ids]
+    if len(posting_ids) != X.shape[0]:
+        raise ValueError("one posting_id per row is needed")
     sparse.save_npz(x_path, X)
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"features": feature_info, "params": params}, f, indent=1)
+        json.dump({"encoding_version": ENCODING_VERSION, "n_rows": X.shape[0],
+                   "features": feature_info, "params": params, "posting_ids": posting_ids},
+                  f, indent=1)
 
 
-def load_encoding(x_path, json_path):
+def load_encoding(x_path, json_path, meta: pd.DataFrame | None = None):
+    """Read the encoding. Stops if the file was written by another encoding version, or if
+    `meta` is given and its posting_id order differs from the row order of the matrix."""
     X = sparse.load_npz(x_path).tocsr()
     with open(json_path, encoding="utf-8") as f:
-        meta = json.load(f)
-    return X, meta["features"], meta["params"]
+        info = json.load(f)
+    version = info.get("encoding_version", "v1/v2 (not stored)")
+    if version != ENCODING_VERSION:
+        raise ValueError(f"{x_path} is encoding {version}, the code is {ENCODING_VERSION}: rerun notebook 02")
+    if X.shape[0] != info["n_rows"]:
+        raise ValueError("matrix and JSON do not belong together")
+    if meta is not None and list(meta["posting_id"].astype(str)) != info["posting_ids"]:
+        raise ValueError("row order of the encoding differs from meta.parquet")
+    return X, info["features"], info["params"]
