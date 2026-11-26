@@ -5,7 +5,8 @@ Design decisions are documented in the Decisions sheet of Thesis_Execution_Plan.
   D9  line order inside the padding (debit first, then account, then amount desc)
   D10 scalers fitted per fiscal year, on the same entries the detector is fitted on (follows D6)
   D4  time features = lag_days + weekend + nwh; promptly is NOT a feature (binning of lag_days)
-  D13 user once per entry; tax_rate is NOT a feature (determined by the accounts)
+  D13 user once per entry; tax_rate and n_lines are NOT features (determined by the account
+      pattern; n_lines is also visible in the PAD slots) - redundancy check of 26 Nov
   D11 nwh_dist, hour sin/cos, weekday sin/cos checked and dropped (built only for the data checks)
 
 Everything is aligned to the row order of data/derived/meta.parquet (posting_id).
@@ -27,11 +28,12 @@ PAD = "PAD"
 
 # Main setting (D4, D11, D13; 25 Nov 2026). Switch groups on/off per run with select_columns().
 FEATURE_GROUPS_MAIN = {
-    "lines": True,           # per-slot account / side / amount, n_lines, user
+    "lines": True,           # per-slot account / side / amount, user
     "calendar_flags": True,  # weekend, nwh
     "lag_days": True,        # continuous entry lag (D4)
     "promptly": False,       # dropped (D4): deterministic binning of lag_days
     "tax_rate": False,       # dropped (D13): deterministic function of the accounts
+    "n_lines": False,        # dropped (D13, 26 Nov): determined by the account pattern, already in the PAD slots
     "nwh_dist": False,       # dropped (D11): no gradient in the data
     "hour_cyc": False,       # dropped (D11)
     "wday_cyc": False,       # dropped (D11)
@@ -200,7 +202,8 @@ def build_onehot(lines: pd.DataFrame, meta: pd.DataFrame):
         add(amt.reshape(-1, 1), [f"s{s+1}_amount"], "lines", s + 1)
 
     # --- per-entry attributes (group "lines", D13: once per entry)
-    add(((ent["n_lines"].to_numpy() - 2) / (MAX_LINES - 2)).reshape(-1, 1), ["n_lines"], "lines")
+    # D13 (26 Nov): n_lines is determined by the account pattern and already visible in the PAD slots
+    add(((ent["n_lines"].to_numpy() - 2) / (MAX_LINES - 2)).reshape(-1, 1), ["n_lines"], "n_lines")
     add(_onehot(ent["user"].to_numpy(), users), [f"user_{u}" for u in users], "lines")
     # D13: tax_rate is a deterministic function of the accounts -> own group, off
     add(_onehot(ent["tax_rate"].to_numpy(), taxes), [f"tax_{t:g}" for t in taxes], "tax_rate")
@@ -245,8 +248,9 @@ def select_columns(X, feature_info, groups: dict):
 
 
 # Encoding version written into results/runs.csv. v2 = decisions review of 25 Nov 2026
-# (promptly and tax_rate dropped, per-year scalers); rows without a version are v1.
-ENCODING_VERSION = "v2"
+# (promptly and tax_rate dropped, per-year scalers); v3 = redundancy check of 26 Nov
+# (n_lines dropped); rows without a version are v1.
+ENCODING_VERSION = "v3"
 
 
 def groups_label(groups: dict) -> str:
