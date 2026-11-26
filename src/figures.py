@@ -264,3 +264,48 @@ def fig_duplicate_groups(X_dense: np.ndarray, k_marks=(40, 50), title: str = "")
     ax.set_title(title or f"Largest group = {counts.max()}: LOF needs k above it", loc="left")
     fig.tight_layout()
     return fig, pd.Series(freq, index=sizes, name="groups")
+
+
+# ------------------------------------------------------------------ dataset description (notebook 01)
+def fig_marking_by_jet(per_marking: pd.DataFrame, jets=("J1", "J2", "J3", "J4")):
+    """Share of the entries of each anomaly marking that each JET flags (whole ledger, dataset description)."""
+    share = per_marking[list(jets) + ["jet_any"]].div(per_marking["n"], axis=0)
+    cols = list(jets) + ["JET union"]
+    rows = [f"M{m} (n = {n})" for m, n in zip(per_marking.index, per_marking["n"])]
+    fig, ax = plt.subplots(figsize=(5.6, 3.6))
+    im = ax.imshow(share.values, cmap="Blues", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(cols)), cols)
+    ax.set_yticks(range(len(rows)), rows)
+    ax.grid(False)
+    ax.axvline(len(jets) - 0.5, color="white", lw=3)        # separate the union column
+    for i in range(share.shape[0]):
+        for j in range(share.shape[1]):
+            v = share.values[i, j]
+            ax.text(j, i, f"{v:.0%}", ha="center", va="center", fontsize=7.5,
+                    color="white" if v > 0.6 else INK)
+    cb = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.03,
+                      format=matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    cb.set_label("share of the marking flagged", color=INK2)
+    cb.outline.set_visible(False)
+    ax.set_title("M1–M6 lie inside the rules; M7 and M8 mostly outside", loc="left")
+    fig.tight_layout()
+    return fig, share
+
+
+def fig_precision_by_h(by_h: pd.DataFrame, base: float):
+    """Precision of the JET population by number of rules hit (h); bar width carries no meaning."""
+    fig, ax = plt.subplots(figsize=(5.0, 2.9))
+    x = np.arange(len(by_h))
+    prec = by_h["anomalies"] / by_h["entries"]
+    ax.bar(x, prec, color=BLUE, width=0.6)
+    ax.set_xticks(x, [f"h = {h}\n{n:,} entries" for h, n in zip(by_h.index, by_h["entries"])])
+    ax.set_ylabel("share of anomalies")
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=None))
+    for xi, v in zip(x, prec):
+        ax.annotate(f"{v:.1%}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                    ha="center", fontsize=8, color=INK)
+    ax.set_ylim(0, prec.max() * 1.15)
+    ax.set_title(f"Rule count orders only the top: most JET entries have h = 1 (ledger base rate {base:.2%})",
+                 loc="left", fontsize=9)
+    fig.tight_layout()
+    return fig
