@@ -76,7 +76,7 @@ def test_ties_are_not_broken_by_row_order():
 
 
 def test_budgets_are_the_preprint_set():
-    b = m.budgets(51_365)
+    b = m.budgets()
     assert b == {"k25": 25, "k50": 50, "k100": 100, "k250": 250, "k500": 500,
                  "k1000": 1000, "k2000": 2000}
 
@@ -87,3 +87,9 @@ def test_evaluate_and_summarise_shapes():
     summ = m.summarise(per_seed)
     assert summ.loc[0, "precision_mean"] == pytest.approx(0.5)
     assert summ.loc[0, "precision_sd"] == pytest.approx(0.0)   # no ties -> same for every seed
+
+
+def test_tag_puts_labels_first():
+    per_seed = m.evaluate(SCORES, LABELS, seeds=(0,), budget_map={"k4": 4})
+    t = m.tag(per_seed, method="x", fy=2024)
+    assert list(t.columns[:2]) == ["method", "fy"] and (t["method"] == "x").all()

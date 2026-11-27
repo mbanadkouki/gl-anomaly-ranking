@@ -97,9 +97,9 @@ All candidate features are computed once and stored together in `X_onehot.npz`. 
 | `hour_cyc` | `hour_sin`, `hour_cos` | off (see D11) | standard technique; ablation |
 | `wday_cyc` | `wday_sin`, `wday_cos` | off (see D11) | standard technique; ablation |
 
-In code (`src/encode.py`): `FEATURE_GROUPS_MAIN`, `select_columns(X, feature_info, groups)`, `groups_label(groups)`.
+In code (`src/encode.py`): `FEATURE_GROUPS_MAIN`, `select_columns(X, feature_info, groups)`, settings by name in `ABLATIONS`.
 
-Every row in `results/runs.csv` stores the active groups (column `feature_groups`, e.g. `lines+calendar_flags+lag_days`), so each result can be traced to its feature set.
+Every result table stores the name of the feature setting (`main`, `no_time`, … = keys of `ABLATIONS`), so each result can be traced to its feature set. (27 Nov: run log `results/runs.csv` with git commit and encoding version replaced by one result file per notebook.)
 
 **Rule against tuning on test labels (same as D6):** the main feature set is fixed before any FY2 result is looked at. If groups are compared to choose the main set, the comparison uses FY1 only; FY2 ablation results are reported as a table but do not change the main setting.
 
@@ -343,7 +343,7 @@ Optional if time allows: ablation of the embedding with vs without `text`.
 - P@k = anomalies in the top k / reviewed entries; FP@k = reviewed − anomalies; R@k = anomalies in the top k / **all** anomalies of the year; AP = mean precision at each hit / **all** anomalies of the year.
 - Ties are broken by a seeded random order; results are the mean (and SD) over 5 seeds. Never by row order.
 - An entry with NaN score is not on the method's list and is never reviewed; if the list is shorter than k, n_reviewed < k.
-- Every run row in `results/runs.csv` stores the git commit (`+dirty` if uncommitted changes).
+- (27 Nov) Results: one file per notebook, overwritten on each run; no git commit per row (D18).
 
 **Options considered and why.**
 
@@ -427,6 +427,6 @@ Every choice that is valid only because of how the synthetic ledger was generate
 
 ## Storage convention
 
-- Tables: Parquet (`pyarrow`). Dense arrays: `.npy`. Sparse matrices: `.npz` (scipy). Results per run: `results/runs.csv` (with a `feature_groups` column).
+- Tables: Parquet (`pyarrow`). Dense arrays: `.npy`. Sparse matrices: `.npz` (scipy). Results: one CSV per notebook (e.g. `results/03_baselines.csv`, with a `setting` column).
 - No pickle for shared outputs (depends on library versions and is unsafe to load from others).
 - Notebooks are named by process step: `01_jets_meta`, `02_encoding_onehot`, `03_baselines`, … (not by week).

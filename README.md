@@ -46,7 +46,7 @@ gl-anomaly-ranking/
 ├── notebooks/        # one notebook per process step (01_jets_meta, 02_encoding_onehot, ...)
 ├── src/              # reusable modules (no week prefix)
 ├── configs/          # run configurations (planned)
-├── results/          # week reports, runs.csv, figures
+├── results/          # one result file per notebook (overwritten on each run), figures
 ├── docs/
 │   └── publications/ # thesis and related papers, once approved by SRH
 ├── requirements.txt
@@ -56,15 +56,15 @@ gl-anomaly-ranking/
 **Current modules**
 - `src/load.py`: load posting lines and build one row per journal entry (raw-derived fields only)
 - `src/jets.py`: J1–J4 implemented from raw fields (validation against the dataset rule attributes, used in notebook 01)
-- `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`)
-- `src/metrics.py`: budget-based metrics (P@k, R@k, FP@k, AP; random tie-break over 5 seeds) and `append_runs` → `results/runs.csv`
+- `src/encode.py`: one-hot + padding encoding with switchable feature groups (`select_columns`, settings in `ABLATIONS`); `save_encoding` / `load_encoding` with a row-order check against `meta.parquet`
+- `src/metrics.py`: budget-based metrics (P@k, R@k, FP@k, AP; random tie-break over 5 seeds); `tag` adds method / setting columns for the result tables
 - `src/detectors.py`: Isolation Forest and LOF (score: higher = more suspicious), tuning grids (D15), per-seed runner
 - `src/embed.py`: sentence construction (D16: T-C main, T-Bak ablation) and MiniLM embeddings, stored as unique sentences + per-entry index
 - `tests/test_embed.py`: tests for the sentence templates and the index
 - `tests/test_metrics.py`: hand-checkable tests for the metrics (toy ranking computed on paper)
 - `notebooks/01_jets_meta.ipynb`: JET flags from the dataset rule attributes, validation against `src/jets.py`, `data/derived/meta.parquet` + `jet_validation.csv`
 - `notebooks/02_encoding_onehot.ipynb`: one-hot + padding encoding → `data/derived/X_onehot.npz` + `onehot_features.json`
-- `notebooks/03_baselines.ipynb`: random, JET-only, Isolation Forest, LOF; tuned on FY2023, reported on FY2024 → `results/runs.csv`
+- `notebooks/03_baselines.ipynb`: random, JET-only, Isolation Forest, LOF; tuned on FY2023, reported on FY2024 → `results/03_baselines.csv`
 - `notebooks/04_encoding_embeddings.ipynb`: 29 distinct sentences → all-MiniLM-L6-v2 embeddings → `data/derived/emb_tc*.npy`, `emb_bak*.npy` (needs sentence-transformers)
 
 **Planned:** `src/methods.py`, `src/stats.py`, `run.py`, `configs/`
@@ -74,9 +74,10 @@ gl-anomaly-ranking/
 - **FY2023 = tuning year** (labels may be used for hyperparameters). **FY2024 = test year.** Fiscal year = year of `posting_date`.
 - The JET populations used in the experiments come from the dataset rule attributes (`top_n`, `high_cash`, `promptly`, `weekend`, `nwh`), for comparability with Gronewald et al. (2026). The raw-field implementation in `src/jets.py` is used for validation only.
 - `top_n`, `high_cash`, `label` and `marking` are **never model features**: `top_n` and `high_cash` define only the JET flags, and `label` and `marking` are used only for evaluation.
-- `promptly`, `weekend` and `nwh` are model features (feature group `calendar_flags`, decision D4, to be confirmed by the supervisors), together with a continuous `lag_days`. Each feature group can be switched off per run, so the proposal variant without them stays available.
+- Time features are derived from the raw timestamps: `weekend` and `nwh` (group `calendar_flags`) and a continuous `lag_days`; `promptly` is built but switched off (D4). Each feature group can be switched on or off per run by name (`fe.ABLATIONS`).
 - Design decisions (D1–D13) with options and rationale: `results/feature_engineering_plan.md`.
-- The raw CSV is never modified. Storage formats: Parquet for tables, `.npy` for dense arrays, `.npz` for sparse matrices and CSV for run results. No pickle.
+- The raw CSV is never modified. Storage formats: Parquet for tables, `.npy` for dense arrays, `.npz` for sparse matrices and CSV for results (one file per notebook, overwritten on each run). No pickle.
+- Run order: notebooks 01 → 10. Rerun notebook 02 whenever `src/encode.py` changes; `load_encoding` stops if the matrix rows do not match `meta.parquet`. The reported results come from one final run of the final code.
 
 ## Run
 

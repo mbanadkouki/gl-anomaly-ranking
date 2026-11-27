@@ -1,5 +1,5 @@
 """Tests for the notebook-02 review changes of 26 Nov 2026 (entry amount, entry-level guard,
-versioned save / load with row order, Wilson interval)."""
+save / load with row-order check, Wilson interval)."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -40,14 +40,14 @@ def test_entry_table_stops_on_mixed_entry_fields():
         fe.entry_table(lines, meta)
 
 
-def test_save_load_checks_version_and_row_order(tmp_path):
+def test_save_load_checks_row_order(tmp_path):
     X = sparse.csr_matrix(np.eye(3, dtype=np.float32))
     info = [{"name": f"c{i}", "group": "lines", "slot": None} for i in range(3)]
     xp, jp = tmp_path / "X.npz", tmp_path / "X.json"
     fe.save_encoding(X, info, {}, xp, jp, posting_ids=["a", "b", "c"])
     X2, info2, _ = fe.load_encoding(xp, jp, meta=pd.DataFrame({"posting_id": ["a", "b", "c"]}))
     assert (X2 != X).nnz == 0 and info2 == info
-    with pytest.raises(ValueError, match="row order"):
+    with pytest.raises(ValueError, match="differ from meta"):
         fe.load_encoding(xp, jp, meta=pd.DataFrame({"posting_id": ["b", "a", "c"]}))
 
 

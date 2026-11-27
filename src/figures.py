@@ -387,3 +387,38 @@ def fig_precision_by_h(by_h: pd.DataFrame, base: float):
                  loc="left", fontsize=9)
     fig.tight_layout()
     return fig
+
+
+# ---------------------------------------------------------------- baselines (notebook 03, Ch. 4)
+METHOD_STYLE = {
+    "random_ledger":    dict(color=GREY, ls=":", label="random, whole ledger"),
+    "random_jet_union": dict(color=GREY, ls="--", label="random inside JET union"),
+    "jet_only":         dict(color=INK, ls="-", label="JET-only (rule hits)"),
+    "iforest":          dict(color="#8fb8ee", ls="-", label="Isolation Forest"),
+    "lof":              dict(color=BLUE, ls="-", label="LOF"),
+}
+
+
+def fig_budget_curves(summary: pd.DataFrame, title: str = ""):
+    """Precision@k and recall@k against the review budget k (log axis), one line per method.
+
+    `summary`: one row per method and budget with columns method, k, precision_mean, recall_mean."""
+    fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.4))
+    for method, t in summary.groupby("method", sort=False):
+        st = METHOD_STYLE.get(method, dict(color=INK2, ls="-", label=method))
+        for ax, col in zip(axes, ["precision_mean", "recall_mean"]):
+            ax.plot(t["k"], t[col], marker="o", ms=3, lw=1.4, **st)
+    for ax, name in zip(axes, ["precision@k", "recall@k (all anomalies of the year)"]):
+        ax.set_xscale("log")
+        ks = sorted(summary["k"].unique())
+        ax.set_xticks(ks)
+        ax.set_xticklabels([f"{k:,}" for k in ks])
+        ax.minorticks_off()
+        ax.set_xlabel("review budget k (entries)")
+        ax.set_title(name)
+        _pct_axis(ax)
+    axes[0].legend(frameon=False, fontsize=8)
+    if title:
+        fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    return fig

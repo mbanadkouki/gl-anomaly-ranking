@@ -253,8 +253,8 @@ def select_columns(X, feature_info, groups: dict):
     return X[:, keep], [feature_info[i]["name"] for i in keep]
 
 
-# Feature settings used in the experiments (main setting + ablations, Ch. 4). Defined once here
-# so that notebooks 02-10 and the result tables use the same names.
+# Feature settings used in the experiments (main setting + ablations, Ch. 4). Defined once here;
+# the key (e.g. "main", "no_time") is the name written into the result tables of notebooks 03-10.
 ABLATIONS = {
     "main": FEATURE_GROUPS_MAIN,
     "main+nwh_dist": {**FEATURE_GROUPS_MAIN, "nwh_dist": True},
@@ -265,42 +265,27 @@ ABLATIONS = {
 }
 
 
-# Encoding version written into results/runs.csv. v2 = decisions review of 25 Nov 2026
-# (promptly and tax_rate dropped, per-year scalers); v3 = redundancy check of 26 Nov
-# (n_lines dropped); rows without a version are v1.
-ENCODING_VERSION = "v3"
-
-
-def groups_label(groups: dict) -> str:
-    """Short text for the feature_groups column in results/runs.csv, e.g. 'lines+calendar_flags+lag_days@v3'."""
-    return "+".join(g for g in ALL_GROUPS if groups.get(g, False)) + f"@{ENCODING_VERSION}"
-
-
 def save_encoding(X, feature_info, params, x_path, json_path, posting_ids):
-    """Write the matrix (npz) and, in the JSON, the columns, fitted parameters, the encoding
-    version and the row order (posting_id of every row), so that later notebooks can check
-    that they use the file they expect (C19, review of 26 Nov 2026)."""
+    """Write the matrix (npz) and, in the JSON, the columns, the fitted parameters and the
+    row order (posting_id of every row). The row order is what load_encoding checks."""
     posting_ids = [str(p) for p in posting_ids]
     if len(posting_ids) != X.shape[0]:
         raise ValueError("one posting_id per row is needed")
     sparse.save_npz(x_path, X)
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"encoding_version": ENCODING_VERSION, "n_rows": X.shape[0],
-                   "features": feature_info, "params": params, "posting_ids": posting_ids},
-                  f, indent=1)
+        json.dump({"features": feature_info, "params": params, "posting_ids": posting_ids}, f, indent=1)
 
 
-def load_encoding(x_path, json_path, meta: pd.DataFrame | None = None):
-    """Read the encoding. Stops if the file was written by another encoding version, or if
-    `meta` is given and its posting_id order differs from the row order of the matrix."""
+def load_encoding(x_path, json_path, meta: pd.DataFrame):
+    """Read the encoding and check that its rows are the entries of `meta`, in the same order.
+
+    This is the one check that protects the results: if the matrix and meta.parquet came from
+    different runs, labels and scores would be shifted without any error. Rule: rerun
+    notebook 02 whenever src/encode.py changes; the final results run notebooks 01-10 in order.
+    """
     X = sparse.load_npz(x_path).tocsr()
     with open(json_path, encoding="utf-8") as f:
         info = json.load(f)
-    version = info.get("encoding_version", "v1/v2 (not stored)")
-    if version != ENCODING_VERSION:
-        raise ValueError(f"{x_path} is encoding {version}, the code is {ENCODING_VERSION}: rerun notebook 02")
-    if X.shape[0] != info["n_rows"]:
-        raise ValueError("matrix and JSON do not belong together")
-    if meta is not None and list(meta["posting_id"].astype(str)) != info["posting_ids"]:
-        raise ValueError("row order of the encoding differs from meta.parquet")
+    if X.shape[0] != len(info["posting_ids"]) or list(meta["posting_id"].astype(str)) != info["posting_ids"]:
+        raise ValueError("rows of the encoding differ from meta.parquet: rerun notebook 02")
     return X, info["features"], info["params"]

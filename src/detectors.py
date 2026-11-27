@@ -16,7 +16,6 @@ from sklearn.neighbors import LocalOutlierFactor
 from . import metrics
 
 # D15: small grids, chosen by mean AP on FY1 (2023) only; edge rule in edge_extension().
-# After the 25 Nov feature changes the grids must be re-run and the duplicate check redone.
 GRIDS = {
     "iforest": [
         {"n_estimators": 100, "max_samples": 256},
@@ -24,8 +23,8 @@ GRIDS = {
         {"n_estimators": 300, "max_samples": 2048},
     ],
     # k must be larger than the largest group of identical entries, otherwise the
-    # k-distance is 0 and LOF is unstable (Campos et al. 2016). Old main set: max group = 36;
-    # re-check after the 25 Nov changes (fewer features -> groups may grow).
+    # k-distance is 0 and LOF is unstable (Campos et al. 2016). Main setting: largest
+    # group = 36 in both years (notebook 02, section 8), so every k here is allowed.
     "lof": [
         {"n_neighbors": 50},
         {"n_neighbors": 100},
@@ -106,5 +105,5 @@ def run(detector: str, X, labels, params: dict, seeds=metrics.SEEDS,
 
 
 def params_label(params: dict) -> str:
-    """Short text for runs.csv, e.g. 'n_estimators=300;max_samples=256'."""
+    """Short text for the result tables, e.g. 'n_estimators=300;max_samples=256'."""
     return ";".join(f"{k}={v}" for k, v in params.items())

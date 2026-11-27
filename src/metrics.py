@@ -18,10 +18,6 @@ Conventions (D14, decided 23 Nov 2026, budgets changed 25 Nov 2026):
 """
 from __future__ import annotations
 
-import subprocess
-from datetime import datetime
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -30,10 +26,8 @@ MAIN_BUDGETS = ("k100", "k1000")
 SEEDS = (0, 1, 2, 3, 4)
 
 
-def budgets(n_entries: int | None = None) -> dict[str, int]:
-    """Budget label -> number of reviewed entries: {'k25': 25, ..., 'k2000': 2000}.
-
-    n_entries is kept for backward compatibility and is not used (no relative budgets since 25 Nov)."""
+def budgets() -> dict[str, int]:
+    """Budget label -> number of reviewed entries: {'k25': 25, ..., 'k2000': 2000}."""
     return {f"k{k}": k for k in BUDGETS_ABS}
 
 
@@ -89,7 +83,7 @@ def average_precision(order: np.ndarray, labels) -> float:
 def evaluate(scores, labels, seeds=SEEDS, budget_map: dict | None = None) -> pd.DataFrame:
     """One row per seed and budget: k, n_reviewed, hits, fp, precision, recall, ap, list_size."""
     y = np.asarray(labels)
-    budget_map = budget_map or budgets(len(y))
+    budget_map = budget_map or budgets()
     rows = []
     for seed in seeds:
         order = review_order(scores, seed)
@@ -109,36 +103,10 @@ def summarise(per_seed: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
-def git_commit(repo_root: Path | str = ".") -> str:
-    """Short hash of the current commit, '+dirty' if there are uncommitted changes; 'unknown' without git."""
-    try:
-        h = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root,
-                           capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=repo_root,
-                               capture_output=True, text=True, check=True).stdout.strip()
-        return h + ("+dirty" if dirty else "")
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-
-
-RUN_COLUMNS = ["run_id", "timestamp", "commit", "method", "detector", "encoding", "feature_groups",
-               "fy", "seed", "budget", "k", "n_reviewed", "hits", "fp", "precision", "recall", "ap",
-               "list_size", "notes"]
-
-
-def append_runs(per_seed: pd.DataFrame, path: Path | str, *, method: str, fy: int,
-                detector: str = "-", encoding: str = "-", feature_groups: str = "-",
-                notes: str = "", repo_root: Path | str = ".") -> str:
-    """Append the per-seed rows of one run to results/runs.csv and return the run_id."""
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{method}-{detector}-{encoding}"
-    df = per_seed.copy()
-    meta = {"run_id": run_id, "timestamp": ts, "commit": git_commit(repo_root), "method": method,
-            "detector": detector, "encoding": encoding, "feature_groups": feature_groups,
-            "fy": fy, "notes": notes}
-    for c, v in meta.items():
-        df[c] = v
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df[RUN_COLUMNS].to_csv(path, mode="a", header=not path.exists(), index=False)
-    return run_id
+def tag(per_seed: pd.DataFrame, **labels) -> pd.DataFrame:
+    """Put descriptive columns (method, detector, setting, fy, ...) in front of the per-seed
+    metrics, so that the rows of several runs can be stacked into one result table."""
+    out = per_seed.copy()
+    for i, (name, value) in enumerate(labels.items()):
+        out.insert(i, name, value)
+    return out
